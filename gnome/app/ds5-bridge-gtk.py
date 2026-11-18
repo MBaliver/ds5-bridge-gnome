@@ -168,7 +168,184 @@ class Glyphs:
         return self.cache[key]
 
 
+# ---------------------------------------------------------- trigger effects
+# Port of upstream shared/trigger-effects.ts (encoding shown as "bytes on the wire").
+
+TRIGGER_EFFECT_TYPES = [
+    ('off', 'Off'), ('resistance', 'Resistance'), ('weapon', 'Weapon'), ('auto', 'Vibration'),
+    ('zoned-feedback', 'Zoned Resistance'), ('zoned-weapon', 'Zoned Weapon'), ('zoned-vibration', 'Zoned Vibration'),
+]
+TRIGGER_ZONES = 10
+TRIGGER_ZONE_FORCE_MAX = 7
+TRIGGER_FREQUENCY_MAX = 15
+TRIGGER_ZONE_FREQUENCY_MAX = 255
+# Upstream's built-in "Default": legacy weapon 20/60/85 as migrated by trigger-effect-migration.ts.
+TRIGGER_DEFAULT_EFFECT = {'type': 'zoned-weapon', 'start': 2, 'end': 6, 'force': 6}
+
+
+def default_trigger_effect(kind):
+    return {
+        'off': {'type': 'off'},
+        'resistance': {'type': 'resistance', 'start': 40, 'force': 180},
+        'weapon': {'type': 'weapon', 'start': 15, 'end': 100, 'force': 255},
+        'auto': {'type': 'auto', 'start': 20, 'force': 200, 'frequency': 10},
+        'zoned-feedback': {'type': 'zoned-feedback', 'zones': [None, None, 3, 4, 5, 5, 5, 5, 5, 5]},
+        'zoned-weapon': {'type': 'zoned-weapon', 'start': 3, 'end': 7, 'force': 6},
+        'zoned-vibration': {'type': 'zoned-vibration', 'zones': [None, None, 4, 4, 4, 4, 4, 4, 4, 4], 'frequency': 8},
+    }[kind]
+
+
+def _clamp(value, lo, hi):
+    import math
+    return max(lo, min(hi, math.floor(value + 0.5)))  # JS Math.round semantics, like upstream
+
+
+def encode_trigger_effect(effect):
+    out = [0] * 11
+
+    def pack(zones, offset):
+        mask, bits = 0, 0
+        for zone in range(TRIGGER_ZONES):
+            level = zones[zone] if zone < len(zones) else None
+            if level is None:
+                continue
+            mask |= 1 << zone
+            bits |= _clamp(level, 0, TRIGGER_ZONE_FORCE_MAX) << (3 * zone)
+        out[offset], out[offset + 1] = mask & 0xff, (mask >> 8) & 0xff
+        for i in range(4):
+            out[offset + 2 + i] = (bits >> (8 * i)) & 0xff
+
+    kind = effect['type']
+    if kind == 'off':
+        out[0] = 0x05
+    elif kind == 'resistance':
+        out[:3] = [0x01, _clamp(effect['start'], 0, 255), _clamp(effect['force'], 0, 255)]
+    elif kind == 'weapon':
+        start = _clamp(effect['start'], 0, 255)
+        out[:4] = [0x02, start, min(max(_clamp(effect['end'], 0, 255), start + 1), 255), _clamp(effect['force'], 0, 255)]
+    elif kind == 'auto':
+        out[:4] = [0x06, _clamp(effect['start'], 0, 255), _clamp(effect['force'], 0, 255),
+                   _clamp(effect['frequency'], 0, TRIGGER_FREQUENCY_MAX)]
+    elif kind == 'zoned-feedback':
+        out[0] = 0x21
+        pack(effect['zones'], 1)
+    elif kind == 'zoned-weapon':
+        start = _clamp(effect['start'], 0, TRIGGER_ZONES - 1)
+        end = max(_clamp(effect['end'], 0, TRIGGER_ZONES - 1), start + 1)
+        mask = (1 << start) | (1 << min(end, TRIGGER_ZONES - 1))
+        out[:4] = [0x25, mask & 0xff, (mask >> 8) & 0xff, _clamp(effect['force'], 0, TRIGGER_ZONE_FORCE_MAX)]
+    elif kind == 'zoned-vibration':
+        out[0] = 0x26
+        pack(effect['zones'], 1)
+        out[9] = _clamp(effect['frequency'], 0, TRIGGER_ZONE_FREQUENCY_MAX)
+    return out
+
+
+# Stick calibration (upstream protocol.ts CALIBRATION_* and StickSweep.tsx).
+CAL_OP_BEGIN, CAL_OP_STORE, CAL_OP_SAMPLE = 1, 2, 3
+CAL_CENTRE, CAL_RANGE = 1, 2
+CAL_OPEN, CAL_COMMITTED, CAL_ALREADY_CLOSED = 1, 2, 3
+CAL_CONFIRM_PHRASE = 'MAKE PERMANENT'
+SWEEP_SECTORS = 48
+SWEEP_RIM = 0.85
+SWEEP_MIN_SECTOR_MS = 30
+SWEEP_PACE_WINDOW = 8
+INPUT_HOLD_MS = 2000
+INPUT_HOLD_RENEW_MS = 700
+
+
+def calibration_step_accepted(status, target, expected):
+    if not status or not status.get('received') or status.get('target') != target:
+        return False
+    return status.get('code') == expected or (expected == CAL_COMMITTED and status.get('code') == CAL_ALREADY_CLOSED)
+
+
+class Sweep:
+    """Directional rim coverage for the range calibration (port of StickSweep.tsx recordSweep)."""
+
+    def __init__(self):
+        self.sectors = [0.0] * SWEEP_SECTORS
+        self.cw = [False] * SWEEP_SECTORS
+        self.ccw = [False] * SWEEP_SECTORS
+        self.last = None
+        self.direction = 0
+        self.entries = []
+        self.x = self.y = 0.0
+
+    def record(self, xb, yb, now_ms):
+        import math
+        x, y = (xb - 128) / 127, (yb - 128) / 127
+        self.x, self.y = x, y
+        magnitude = min(1.0, math.hypot(x, y))
+        if magnitude < 0.25:
+            return
+        sector = int(((math.atan2(y, x) + math.pi) / (2 * math.pi)) * SWEEP_SECTORS) % SWEEP_SECTORS
+        self.sectors[sector] = max(self.sectors[sector], magnitude)
+        if magnitude < SWEEP_RIM:
+            return
+        if self.last is None:
+            self.last, self.direction, self.entries = sector, 0, [now_ms]
+            return
+        if sector == self.last:
+            return
+        delta = (sector - self.last + SWEEP_SECTORS) % SWEEP_SECTORS
+        step = 1 if delta == 1 else -1 if delta == SWEEP_SECTORS - 1 else 0
+        if step == 0 or (self.direction != 0 and step != self.direction):
+            self.direction, self.entries = step, [now_ms]
+        else:
+            self.direction = step
+            self.entries = (self.entries + [now_ms])[-SWEEP_PACE_WINDOW:]
+            steps = len(self.entries) - 1
+            if steps > 0 and now_ms - self.entries[0] >= steps * SWEEP_MIN_SECTOR_MS:
+                (self.cw if step == 1 else self.ccw)[sector] = True
+        self.last = sector
+
+    def coverage(self, direction):
+        values = self.cw if direction == 'cw' else self.ccw
+        return sum(values) / SWEEP_SECTORS
+
+    @property
+    def complete(self):
+        return all(self.cw) and all(self.ccw)
+
+
+class LocalState:
+    """Front-end-only state (upstream keeps the Trigger Lab in the renderer's localStorage)."""
+
+    def __init__(self):
+        self.path = os.path.join(GLib.get_user_config_dir(), 'DS5 Bridge', 'gnome-ui.json')
+        try:
+            with open(self.path, encoding='utf-8') as fh:
+                self.data = json.load(fh)
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, key, default):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(self.data, fh, indent=1)
+        os.replace(tmp, self.path)
+
+
 GLYPHS = Glyphs()
+
+
+def glyph_picture(name, size=24):
+    """An upstream glyph by file name (e.g. 'R2', 'Left Stick'), recolored to the text color."""
+    image = Gtk.Image(pixel_size=size, valign=Gtk.Align.CENTER)
+
+    def paint(*_):
+        texture = GLYPHS.texture(name, size, image.get_color())
+        if texture:
+            image.set_from_paintable(texture)
+    image.connect('realize', paint)
+    Adw.StyleManager.get_default().connect('notify::dark', paint)
+    return image
 
 
 def glyph_widget(button_id, size=24):
@@ -178,16 +355,7 @@ def glyph_widget(button_id, size=24):
         label.add_css_class('caption-heading')
         label.add_css_class('ds5-pill')
         return label
-    picture = Gtk.Picture(width_request=size, height_request=size, can_shrink=True,
-                          content_fit=Gtk.ContentFit.CONTAIN, valign=Gtk.Align.CENTER)
-
-    def paint(*_):
-        texture = GLYPHS.texture(REMAP_GLYPHS.get(button_id, ''), size, picture.get_color())
-        if texture:
-            picture.set_paintable(texture)
-    picture.connect('realize', paint)
-    Adw.StyleManager.get_default().connect('notify::dark', paint)
-    return picture
+    return glyph_picture(REMAP_GLYPHS.get(button_id, ''), size)
 
 
 def controller_label(kind):
@@ -244,13 +412,15 @@ class Daemon(GObject.Object):
         self.emit('available', self.running)
         self.call('bridge:getStatus', done=lambda snap: self.emit('snapshot', snap), quiet=True)
 
-    def call(self, channel, *args, done=None, quiet=False):
+    def call(self, channel, *args, done=None, quiet=False, fail=None):
         def finish(proxy, result):
             try:
                 (text,) = proxy.call_finish(result).unpack()
             except GLib.Error as error:
                 message = Gio.DBusError.get_remote_error(error) and error.message.split(': ', 1)[-1] or error.message
-                if not quiet:
+                if fail:
+                    fail(message)
+                elif not quiet:
                     self.emit('error', message)
                 return
             value = decode(text)
@@ -432,6 +602,249 @@ def group(title=None, description=None, *rows):
     return g
 
 
+def draw_sweep(area, cr, width, height, sweep):
+    """Range-calibration coverage: rim, reach so far (filled), live stick position."""
+    import math
+    fg = area.get_color()
+    accent = Adw.StyleManager.get_default().get_accent_color_rgba()
+    cx, cy = width / 2, height / 2
+    radius = min(width, height) / 2 - 8
+    cr.set_line_width(1.5)
+    for scale, alpha in ((1.0, 0.35), (0.66, 0.15)):
+        cr.set_source_rgba(fg.red, fg.green, fg.blue, alpha)
+        cr.arc(cx, cy, radius * scale, 0, 2 * math.pi)
+        cr.stroke()
+    for index, reach in enumerate(sweep.sectors):
+        angle = ((index + 0.5) / SWEEP_SECTORS) * 2 * math.pi - math.pi
+        x, y = cx + math.cos(angle) * reach * radius, cy + math.sin(angle) * reach * radius
+        cr.line_to(x, y) if index else cr.move_to(x, y)
+    cr.close_path()
+    cr.set_source_rgba(accent.red, accent.green, accent.blue, 0.35)
+    cr.fill()
+    # Directional credit as two thin arcs just outside the rim: inner = clockwise, outer = counterclockwise.
+    for ring, done in ((radius + 3, sweep.cw), (radius + 6, sweep.ccw)):
+        for index, ok in enumerate(done):
+            if ok:
+                start = (index / SWEEP_SECTORS) * 2 * math.pi - math.pi
+                cr.set_source_rgba(accent.red, accent.green, accent.blue, 1)
+                cr.arc(cx, cy, ring, start, start + 2 * math.pi / SWEEP_SECTORS)
+                cr.stroke()
+    cr.set_source_rgba(fg.red, fg.green, fg.blue, 1)
+    cr.arc(cx + sweep.x * radius, cy + sweep.y * radius, 5, 0, 2 * math.pi)
+    cr.fill()
+
+
+class TriggerEditor:
+    """One Trigger Lab side: preset, effect type, native-range parameters, zones, bytes, apply."""
+
+    PARAMS = {
+        'resistance': [('start', 'Start Position', 0, 255), ('force', 'Force', 0, 255)],
+        'weapon': [('start', 'Start Position', 0, 255), ('end', 'Release Position', 0, 255),
+                   ('force', 'Force', 0, 255)],
+        'auto': [('start', 'Start Position', 0, 255), ('force', 'Strength', 0, 255),
+                 ('frequency', 'Frequency', 0, TRIGGER_FREQUENCY_MAX)],
+        'zoned-weapon': [('start', 'Start Zone', 0, TRIGGER_ZONES - 1), ('end', 'Release Zone', 0, TRIGGER_ZONES - 1),
+                         ('force', 'Force', 0, TRIGGER_ZONE_FORCE_MAX)],
+        'zoned-vibration': [('frequency', 'Frequency', 0, TRIGGER_ZONE_FREQUENCY_MAX)],
+    }
+
+    def __init__(self, window, title, draft_key, send_side):
+        self.w = window
+        self.key = draft_key
+        self.side = send_side
+        self.loading = False
+        self.group = Adw.PreferencesGroup(title=title)
+        self.dynamic = []
+
+        self.preset = Adw.ComboRow(title='Preset')
+        self.preset.connect('notify::selected', self._on_preset)
+        menu = Gio.Menu()
+        prefix = f'lab-{send_side}'
+        for name, label, fn in (('save', 'Save as New Preset…', self._save_preset),
+                                ('rename', 'Rename…', self._rename_preset),
+                                ('delete', 'Delete…', self._delete_preset)):
+            menu.append(label, f'{prefix}.{name}')
+        actions = Gio.SimpleActionGroup()
+        for name, fn in (('save', self._save_preset), ('rename', self._rename_preset), ('delete', self._delete_preset)):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect('activate', lambda _a, _p, fn=fn: fn())
+            actions.add_action(action)
+        window.insert_action_group(prefix, actions)
+        self.preset.add_suffix(Gtk.MenuButton(icon_name='view-more-symbolic', menu_model=menu, valign=Gtk.Align.CENTER,
+                                              css_classes=['flat'], tooltip_text='Preset Actions'))
+
+        self.kind = Adw.ComboRow(title='Effect', model=Gtk.StringList.new([l for _, l in TRIGGER_EFFECT_TYPES]))
+        self.kind.connect('notify::selected', self._on_kind)
+        self.bytes = Adw.ActionRow(title='Bytes Sent to the Controller', css_classes=['property'],
+                                   subtitle_selectable=True)
+        actions_row = Adw.ActionRow(title='Send to Controller')
+        off = Gtk.Button(label='Turn Off', valign=Gtk.Align.CENTER)
+        off.connect('clicked', lambda *_: self.w._send_trigger(self.side, {'type': 'off'}))
+        apply = Gtk.Button(label='Apply', valign=Gtk.Align.CENTER, css_classes=['suggested-action'])
+        apply.connect('clicked', lambda *_: self.w._send_trigger(self.side, self.effect))
+        actions_row.add_suffix(off)
+        actions_row.add_suffix(apply)
+        for row in (self.preset, self.kind):
+            self.group.add(row)
+        self.tail = [self.bytes, actions_row]
+        for row in self.tail:
+            self.group.add(row)
+
+    @property
+    def effect(self):
+        return self.w.lab['drafts'][self.key]
+
+    def _set_effect(self, effect):
+        self.w.lab['drafts'][self.key] = effect
+        if self.side == 'both':
+            self.w.lab['drafts']['r2'] = json.loads(json.dumps(effect))
+        self.w._save_lab()
+        self._update_bytes()
+        self._sync_preset()
+
+    def _presets(self):
+        return [{'id': 'default', 'name': 'Default', 'effect': TRIGGER_DEFAULT_EFFECT}] + self.w.lab['profiles']
+
+    def _sync_preset(self):
+        self.loading = True
+        presets = self._presets()
+        names = [p['name'] for p in presets]
+        match = next((i for i, p in enumerate(presets) if p['effect'] == self.effect), None)
+        if match is None:
+            names.append('Custom')
+            match = len(names) - 1
+        self.preset.set_model(Gtk.StringList.new(names))
+        self.preset.set_selected(match)
+        self.loading = False
+
+    def _on_preset(self, *_):
+        presets = self._presets()
+        index = self.preset.get_selected()
+        if self.loading or index >= len(presets):
+            return
+        self._set_effect(json.loads(json.dumps(presets[index]['effect'])))
+        self.load()
+
+    def _current_custom(self):
+        index = self.preset.get_selected()
+        presets = self._presets()
+        return presets[index] if 0 < index < len(presets) else None
+
+    def _save_preset(self):
+        def save(name):
+            self.w.lab['profiles'].append({'id': new_id('trigger'), 'name': name,
+                                           'effect': json.loads(json.dumps(self.effect))})
+            self.w._save_lab()
+            self._refresh_all()
+        self.w._ask_name('New Trigger Preset', '', 'Save', save)
+
+    def _rename_preset(self):
+        preset = self._current_custom()
+        if not preset:
+            self.w.toast('Choose a saved preset to rename')
+            return
+
+        def rename(name):
+            preset['name'] = name
+            self.w._save_lab()
+            self._refresh_all()
+        self.w._ask_name('Rename Preset', preset['name'], 'Rename', rename)
+
+    def _delete_preset(self):
+        preset = self._current_custom()
+        if not preset:
+            self.w.toast('Choose a saved preset to delete')
+            return
+
+        def delete():
+            self.w.lab['profiles'] = [p for p in self.w.lab['profiles'] if p['id'] != preset['id']]
+            self.w._save_lab()
+            self._refresh_all()
+        self.w._confirm(f'Delete “{preset["name"]}”?', 'This trigger preset will be removed.', 'Delete', delete)
+
+    def _refresh_all(self):
+        for editor in self.w.trigger_editors.values():
+            editor._sync_preset()
+
+    def _on_kind(self, *_):
+        if self.loading:
+            return
+        kind = TRIGGER_EFFECT_TYPES[self.kind.get_selected()][0]
+        if kind != self.effect['type']:
+            self._set_effect(default_trigger_effect(kind))
+            self.load()
+
+    def _update_bytes(self):
+        self.bytes.set_subtitle('<tt>' + ' '.join(f'{b:02x}' for b in encode_trigger_effect(self.effect)) + '</tt>')
+
+    def load(self):
+        """Rebuild the parameter rows for the current draft."""
+        self.loading = True
+        effect = self.effect
+        self.kind.set_selected([k for k, _ in TRIGGER_EFFECT_TYPES].index(effect['type']))
+        for row in self.dynamic + self.tail:
+            self.group.remove(row)
+        self.dynamic = []
+        for field, title, lo, hi in self.PARAMS.get(effect['type'], []):
+            row = Adw.SpinRow.new_with_range(lo, hi, 1)
+            row.set_title(title)
+            row.set_value(effect.get(field, lo))
+
+            def changed(r, _p, f=field):
+                if not self.loading:
+                    self._set_effect({**self.effect, f: int(r.get_value())})
+            row.connect('notify::value', changed)
+            self.dynamic.append(row)
+        if 'zones' in effect:
+            self.dynamic.append(self._zones_row(effect))
+        for row in self.dynamic + self.tail:
+            self.group.add(row)
+        self._update_bytes()
+        self.loading = False
+        self._sync_preset()
+
+    def _zones_row(self, effect):
+        """Ten vertical sliders, travel from left (start) to right (end). Bottom notch = zone off."""
+        row = Adw.PreferencesRow(activatable=False, focusable=False)
+        box = Gtk.Box(spacing=4, homogeneous=True, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        title = Gtk.Label(label='Zones', xalign=0, css_classes=['dim-label', 'caption'])
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.append(title)
+        title.set_margin_start(12)
+        title.set_margin_top(8)
+        for zone in range(TRIGGER_ZONES):
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            value_label = Gtk.Label(css_classes=['numeric', 'caption'])
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, -1, TRIGGER_ZONE_FORCE_MAX, 1)
+            scale.set_inverted(True)
+            scale.set_draw_value(False)
+            scale.set_size_request(-1, 120)
+            scale.set_halign(Gtk.Align.CENTER)
+            level = effect['zones'][zone]
+            scale.set_value(-1 if level is None else level)
+            value_label.set_label('–' if level is None else str(level))
+
+            def moved(s, z=zone, lab=value_label):
+                v = int(round(s.get_value()))
+                lab.set_label('–' if v < 0 else str(v))
+                if self.loading:
+                    return
+                zones = list(self.effect['zones'])
+                zones[z] = None if v < 0 else v
+                self._set_effect({**self.effect, 'zones': zones})
+            scale.connect('value-changed', moved)
+            column.append(value_label)
+            column.append(scale)
+            column.append(Gtk.Label(label=str(zone + 1), css_classes=['dim-label', 'caption']))
+            box.append(column)
+        outer.append(box)
+        hint = Gtk.Label(label='Bottom position turns a zone off; 0–7 is its strength.', wrap=True, xalign=0,
+                         css_classes=['dim-label', 'caption'], margin_start=12, margin_bottom=10)
+        outer.append(hint)
+        row.set_child(outer)
+        return row
+
+
 # ----------------------------------------------------------------- window
 
 class Window(Adw.ApplicationWindow):
@@ -440,6 +853,7 @@ class Window(Adw.ApplicationWindow):
         self.set_size_request(360, 400)
         self.daemon = daemon
         self.snapshot = None
+        self.local = LocalState()
         self.b = Binder(self)
 
         self.toasts = Adw.ToastOverlay()
@@ -452,7 +866,8 @@ class Window(Adw.ApplicationWindow):
             ('devices', 'Devices', 'bluetooth-symbolic', self._page_devices),
             ('audio', 'Audio', 'audio-speakers-symbolic', self._page_audio),
             ('haptics', 'Haptics', 'weather-storm-symbolic', self._page_haptics),
-            ('triggers', 'Triggers & Sticks', 'find-location-symbolic', self._page_triggers),
+            ('triggers', 'Triggers', 'glyph:R2', self._page_triggers),
+            ('sticks', 'Sticks', 'glyph:Left Stick', self._page_sticks),
             ('lighting', 'Lighting', 'display-brightness-symbolic', self._page_lighting),
             ('buttons', 'Buttons', 'input-keyboard-symbolic', self._page_buttons),
             ('remapping', 'Remapping', 'media-playlist-shuffle-symbolic', self._page_remapping),
@@ -466,7 +881,7 @@ class Window(Adw.ApplicationWindow):
             page = build()
             self.stack.add_named(page, key)
             box = Gtk.Box(spacing=12)
-            box.append(Gtk.Image(icon_name=icon))
+            box.append(glyph_picture(icon[6:], 20) if icon.startswith('glyph:') else Gtk.Image(icon_name=icon))
             box.append(Gtk.Label(label=title, xalign=0))
             row = Gtk.ListBoxRow(child=box)
             row._key, row._title = key, title
@@ -858,9 +1273,92 @@ class Window(Adw.ApplicationWindow):
             group(None, None, expander),
         )
 
+    # ---- multi-step flows (calibration): a generator yields ('call', channel, *args) or ('sleep', ms)
+
+    def run_flow(self, gen, on_error=None):
+        def step(value=None, error=None):
+            try:
+                item = gen.throw(RuntimeError(error)) if error is not None else gen.send(value)
+            except StopIteration:
+                return
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                (on_error or self.toast)(str(exc))
+                return
+            if item[0] == 'sleep':
+                GLib.timeout_add(item[1], lambda: (step(), GLib.SOURCE_REMOVE)[1])
+            else:
+                self.daemon.call(item[1], *item[2:], done=lambda v: step(v), fail=lambda m: step(error=m))
+        step()
+
+    # ---- triggers
+
     def _page_triggers(self):
         b = self.b
-        test_mode = {'value': 'feedback'}
+        lab = self.local.get('triggerLab', {})
+        self.lab = {
+            'linked': lab.get('linked', True),
+            'drafts': lab.get('drafts') or {'l2': dict(TRIGGER_DEFAULT_EFFECT), 'r2': dict(TRIGGER_DEFAULT_EFFECT)},
+            'profiles': lab.get('profiles', []),
+        }
+        editors = {
+            'both': TriggerEditor(self, 'Both Triggers', 'l2', 'both'),
+            'l2': TriggerEditor(self, 'Left Trigger (L2)', 'l2', 'l2'),
+            'r2': TriggerEditor(self, 'Right Trigger (R2)', 'r2', 'r2'),
+        }
+        self.trigger_editors = editors
+        linked = Adw.SwitchRow(title='Same Effect on Both Triggers', active=self.lab['linked'])
+
+        def on_linked(*_):
+            self.lab['linked'] = linked.get_active()
+            if self.lab['linked']:
+                self.lab['drafts']['r2'] = json.loads(json.dumps(self.lab['drafts']['l2']))
+            self._save_lab()
+            show()
+        linked.connect('notify::active', on_linked)
+
+        def show():
+            editors['both'].group.set_visible(self.lab['linked'])
+            editors['l2'].group.set_visible(not self.lab['linked'])
+            editors['r2'].group.set_visible(not self.lab['linked'])
+            for editor in editors.values():
+                editor.load()
+        show()
+
+        power_cap = lambda s: POWER_SAVING_CAP if dig(s, 'settings.controllerPowerSavingEnabled') else 100  # noqa: E731
+        return self._page(
+            group('Adaptive Triggers', 'Resistance and vibration that games ask for',
+                  b.switch('Adaptive Triggers', lambda s: dig(s, 'settings.adaptiveTriggersEnabled'),
+                           self.setter('bridge:setAdaptiveTriggersEnabled')),
+                  b.scale('Intensity', 0, 100, 10, lambda s: dig(s, 'settings.triggerEffectIntensityPercent'),
+                          self.setter('bridge:setTriggerEffectIntensity'), max_fn=power_cap),
+                  b.combo('Test Effect', TRIGGER_TESTS, lambda s: dig(s, 'settings.triggerTestMode'),
+                          self.setter('bridge:setTriggerTestMode')),
+                  button_row('Test Triggers', 'Test', lambda: self.call(
+                      'bridge:testAdaptiveTriggers', dig(self.snapshot, 'settings.triggerTestMode', 'feedback'), 'both')),
+                  button_row('Reset Triggers', 'Reset', lambda: self.call('bridge:resetAdaptiveTriggers'),
+                             subtitle='Clear any effect a game or the Trigger Lab left applied')),
+            group('Trigger Lab', 'Compose an effect and send it straight to the controller. It stays until a '
+                                 'game sets its own or you reset the triggers.', linked),
+            editors['both'].group, editors['l2'].group, editors['r2'].group,
+        )
+
+    def _save_lab(self):
+        self.local.set('triggerLab', self.lab)
+
+    def _send_trigger(self, side, effect):
+        off = {'type': 'off'}
+        if side == 'both':
+            self.call('bridge:setRawTriggerEffect', 'both', effect, effect)
+        elif side == 'l2':
+            self.call('bridge:setRawTriggerEffect', 'l2', off, effect)
+        else:
+            self.call('bridge:setRawTriggerEffect', 'r2', effect, off)
+
+    # ---- sticks
+
+    def _page_sticks(self):
+        b = self.b
+        self.calibration = {'busy': False, 'hold': 0}
 
         def deadzone(side):
             def send(value):
@@ -870,28 +1368,224 @@ class Window(Adw.ApplicationWindow):
                           value if side == 'right' else right)
             return send
 
-        def set_test_mode(mode):
-            test_mode['value'] = mode
-            self.call('bridge:setTriggerTestMode', mode)
+        self.cal_status = Adw.ActionRow(title='Last Result', subtitle='No calibration run yet', css_classes=['property'])
+        centre = button_row('Centre', 'Calibrate', lambda: self._calibrate(CAL_CENTRE),
+                            subtitle='Fixes drift. Leave both sticks untouched while it runs.')
+        sweep = button_row('Range', 'Calibrate', lambda: self._calibrate(CAL_RANGE),
+                           subtitle='Fixes sticks that do not reach the edge. You sweep both sticks around the rim.')
+        perm_centre = button_row('Write Centre Permanently', 'Write…', lambda: self._confirm_permanent(CAL_CENTRE),
+                                 style='destructive-action')
+        perm_range = button_row('Write Range Permanently', 'Write…', lambda: self._confirm_permanent(CAL_RANGE),
+                                style='destructive-action')
+        cal_rows = [centre, sweep, perm_centre, perm_range]
+        b.syncers.append(lambda s: [r.set_sensitive(bool(dig(s, 'status.controllerConnected'))
+                                                    and not self.calibration['busy']) for r in cal_rows])
+        self.cal_rows = cal_rows
 
-        power_cap = lambda s: POWER_SAVING_CAP if dig(s, 'settings.controllerPowerSavingEnabled') else 100  # noqa: E731
         return self._page(
-            group('Adaptive Triggers', None,
-                  b.switch('Adaptive Triggers', lambda s: dig(s, 'settings.adaptiveTriggersEnabled'),
-                           self.setter('bridge:setAdaptiveTriggersEnabled')),
-                  b.scale('Intensity', 0, 100, 10, lambda s: dig(s, 'settings.triggerEffectIntensityPercent'),
-                          self.setter('bridge:setTriggerEffectIntensity'), max_fn=power_cap),
-                  b.combo('Test Effect', TRIGGER_TESTS, lambda s: dig(s, 'settings.triggerTestMode'), set_test_mode),
-                  button_row('Test Triggers', 'Test', lambda: self.call(
-                      'bridge:testAdaptiveTriggers', dig(self.snapshot, 'settings.triggerTestMode', 'feedback'), 'both')),
-                  button_row('Reset Triggers', 'Reset', lambda: self.call('bridge:resetAdaptiveTriggers'),
-                             subtitle='Clear any effect a game left applied')),
-            group('Stick Deadzone', 'Radial deadzone as a share of stick travel. 0 turns it off.',
+            group('Deadzone', 'Radial deadzone as a share of stick travel. 0 turns it off.',
                   b.spin('Left Stick', 0, 50, 1, lambda s: dig(s, 'settings.stickDeadzoneLeftPercent'), deadzone('left')),
                   b.spin('Right Stick', 0, 50, 1, lambda s: dig(s, 'settings.stickDeadzoneRightPercent'), deadzone('right'))),
-            group(None, 'The trigger effect editor, stick calibration and live input tester are in the classic interface.',
-                  button_row('Advanced Tools', 'Open', lambda: self.get_application().activate_action('classic'))),
+            group('Calibration', 'Temporary: restarting the controller brings back its previous calibration. '
+                                 'Input is held from games while it runs.', centre, sweep, self.cal_status),
+            group('Permanent Calibration',
+                  'Writes the calibration into the controller’s permanent storage. A reset will not undo it, and an '
+                  'interrupted write can leave the controller unusable. Run the temporary calibration first.',
+                  perm_centre, perm_range),
+            group(None, 'The live input tester is in the classic interface.',
+                  button_row('Input Tester', 'Open', lambda: self.get_application().activate_action('classic'))),
         )
+
+    def _set_cal_busy(self, busy):
+        self.calibration['busy'] = busy
+        connected = bool(dig(self.snapshot, 'status.controllerConnected'))
+        for row in self.cal_rows:
+            row.set_sensitive(connected and not busy)
+
+    def _hold_input(self, on):
+        """Keep the controller's input away from games while calibrating (upstream tester lease)."""
+        if self.calibration['hold']:
+            GLib.source_remove(self.calibration['hold'])
+            self.calibration['hold'] = 0
+        if on:
+            renew = lambda: (self.call('bridge:holdInputForwarding', INPUT_HOLD_MS, quiet=True), True)[1]  # noqa: E731
+            renew()
+            self.calibration['hold'] = GLib.timeout_add(INPUT_HOLD_RENEW_MS, renew)
+        else:
+            self.call('bridge:holdInputForwarding', 0, quiet=True)
+
+    def _cal_step(self, op, target, expected):
+        yield ('call', 'bridge:sendStickCalibration', op, target)
+        yield ('sleep', 250)  # the reply crosses Bluetooth asynchronously
+        status = yield ('call', 'bridge:readCalibrationStatus')
+        if status and status.get('received'):
+            self.cal_status.set_subtitle(f'Controller replied: target {status["target"]}, code {status["code"]}')
+        return calibration_step_accepted(status, target, expected)
+
+    def _calibrate(self, target, permanent=False):
+        if self.calibration['busy']:
+            return
+        label = 'Centre' if target == CAL_CENTRE else 'Range'
+        self._set_cal_busy(True)
+        self._hold_input(True)
+        state = {'awaiting_sweep': False}
+
+        def flow():
+            try:
+                if permanent:
+                    yield ('call', 'bridge:setNvsUnlocked', True)
+                # No cancel opcode exists: a session left open by an interrupted run blocks every
+                # begin until committed, so retry once behind a store (upstream beginCalibration).
+                ok = yield from self._cal_step(CAL_OP_BEGIN, target, CAL_OPEN)
+                if not ok:
+                    yield from self._cal_step(CAL_OP_STORE, target, CAL_COMMITTED)
+                    ok = yield from self._cal_step(CAL_OP_BEGIN, target, CAL_OPEN)
+                    self.toast('A previous calibration session was still open and had to be closed; '
+                               'that close may already have changed the calibration')
+                if not ok:
+                    self.cal_status.set_subtitle('Could not start calibration. Restart the controller and try again.')
+                    return
+                if target == CAL_CENTRE:
+                    self.cal_status.set_subtitle('Sampling centre — leave the sticks alone')
+                    yield ('sleep', 600)
+                    if not (yield from self._cal_step(CAL_OP_SAMPLE, target, CAL_OPEN)):
+                        self.cal_status.set_subtitle('Sampling was refused. Nothing was stored.')
+                        return
+                    self.cal_status.set_subtitle('Storing…')
+                    if (yield from self._cal_step(CAL_OP_STORE, target, CAL_COMMITTED)):
+                        self.cal_status.set_subtitle(f'{label} calibrated' + (' permanently' if permanent else ''))
+                        self.toast(f'{label} calibrated')
+                    else:
+                        self.cal_status.set_subtitle('The controller did not confirm the write.')
+                else:
+                    state['awaiting_sweep'] = True
+            finally:
+                if permanent:
+                    # Re-lock even after a failure: leaving NVS writable is the dangerous outcome.
+                    yield ('call', 'bridge:setNvsUnlocked', False)
+                if state['awaiting_sweep']:
+                    GLib.idle_add(lambda: (self._sweep_dialog(permanent), GLib.SOURCE_REMOVE)[1])
+                else:
+                    self._hold_input(False)
+                    self._set_cal_busy(False)
+
+        def failed(message):
+            self.cal_status.set_subtitle(message)
+            self.toast(message)
+            self._hold_input(False)
+            self._set_cal_busy(False)
+        self.run_flow(flow(), on_error=failed)
+
+    def _sweep_dialog(self, permanent):
+        sweeps = {'left': Sweep(), 'right': Sweep()}
+        poll = {'id': 0, 'busy': False, 'done': False}
+        dialog = Adw.Dialog(title='Range Calibration', content_width=520, can_close=False)
+        header = Adw.HeaderBar(show_start_title_buttons=False, show_end_title_buttons=False)
+        cancel = Gtk.Button(label='Cancel')
+        finish = Gtk.Button(label='Finish', css_classes=['suggested-action'], sensitive=False)
+        header.pack_start(cancel)
+        header.pack_end(finish)
+        intro = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, label=(
+            'Push each stick to its limit and sweep slowly around the rim: one full circle clockwise, then one '
+            'counterclockwise, about two seconds per circle. A gap is a direction the controller has not seen yet.'))
+        areas = Gtk.Box(spacing=24, halign=Gtk.Align.CENTER)
+        labels = {}
+        drawings = {}
+        for side, title in (('left', 'Left Stick'), ('right', 'Right Stick')):
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            area = Gtk.DrawingArea(content_width=180, content_height=180)
+            area.set_draw_func(lambda a, cr, w, h, sw=sweeps[side]: draw_sweep(a, cr, w, h, sw))
+            caption = Gtk.Label(label=title, css_classes=['heading'])
+            info = Gtk.Label(css_classes=['dim-label', 'numeric', 'caption'])
+            for w in (area, caption, info):
+                column.append(w)
+            areas.append(column)
+            labels[side], drawings[side] = info, area
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_top=12, margin_bottom=24,
+                       margin_start=24, margin_end=24)
+        body.append(intro)
+        body.append(areas)
+        view = Adw.ToolbarView(content=body)
+        view.add_top_bar(header)
+        dialog.set_child(view)
+
+        def tick():
+            if poll['done']:
+                return GLib.SOURCE_REMOVE
+            if not poll['busy']:
+                poll['busy'] = True
+
+                def got(state):
+                    poll['busy'] = False
+                    if not state:
+                        return
+                    now = GLib.get_monotonic_time() / 1000
+                    sweeps['left'].record(state['leftStickX'], state['leftStickY'], now)
+                    sweeps['right'].record(state['rightStickX'], state['rightStickY'], now)
+                    for side, sw in sweeps.items():
+                        labels[side].set_label(f'CW {sw.coverage("cw"):.0%} · CCW {sw.coverage("ccw"):.0%}')
+                        drawings[side].queue_draw()
+                    finish.set_sensitive(all(sw.complete for sw in sweeps.values()))
+                self.daemon.call('bridge:readControllerInput', done=got, quiet=True,
+                                 fail=lambda _m: poll.__setitem__('busy', False))
+            return GLib.SOURCE_CONTINUE
+        poll['id'] = GLib.timeout_add(40, tick)
+
+        def close(stored_flow=None):
+            poll['done'] = True
+            dialog.force_close()
+            if stored_flow is None:
+                self.cal_status.set_subtitle('Range calibration cancelled. Nothing was stored.')
+                self._hold_input(False)
+                self._set_cal_busy(False)
+
+        def store():
+            close(stored_flow=True)
+
+            def flow():
+                try:
+                    if permanent:
+                        yield ('call', 'bridge:setNvsUnlocked', True)
+                    self.cal_status.set_subtitle('Storing…')
+                    if (yield from self._cal_step(CAL_OP_STORE, CAL_RANGE, CAL_COMMITTED)):
+                        self.cal_status.set_subtitle('Range calibrated' + (' permanently' if permanent else ''))
+                        self.toast('Range calibrated')
+                    else:
+                        self.cal_status.set_subtitle('The controller did not confirm the write.')
+                finally:
+                    if permanent:
+                        yield ('call', 'bridge:setNvsUnlocked', False)
+                    self._hold_input(False)
+                    self._set_cal_busy(False)
+            self.run_flow(flow())
+        cancel.connect('clicked', lambda *_: close())
+        finish.connect('clicked', lambda *_: store())
+        self._sweep_finish = finish  # dev snapshots press it
+        dialog.present(self)
+
+    def _confirm_permanent(self, target):
+        what = 'centre' if target == CAL_CENTRE else 'range'
+        dialog = Adw.AlertDialog(heading='Write Calibration Permanently?', body_use_markup=True, body=(
+            f'This unlocks the controller’s permanent storage and writes the {what} calibration into it. '
+            '<b>A reset will not undo it.</b>\n\n'
+            '• <b>It can permanently break the controller.</b> Be prepared to lose it.\n'
+            '• <b>Nobody can guarantee it works.</b> The unlock sequence is reverse-engineered and was worked '
+            'out on a handful of units.\n'
+            '• <b>There is no undo.</b> Reverting means calibrating again and getting a good result.\n'
+            '• <b>An interruption is the dangerous case.</b> A disconnect or a dead battery mid-write can leave '
+            'calibration data that is neither the old values nor the new ones.\n\n'
+            f'Type <b>{CAL_CONFIRM_PHRASE}</b> to continue.'))
+        entry = Gtk.Entry(placeholder_text=CAL_CONFIRM_PHRASE)
+        dialog.set_extra_child(entry)
+        dialog.add_response('cancel', 'Cancel')
+        dialog.add_response('write', 'Write Permanently')
+        dialog.set_response_appearance('write', Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_response_enabled('write', False)
+        dialog.set_default_response('cancel')
+        entry.connect('changed', lambda e: dialog.set_response_enabled(
+            'write', e.get_text().strip().upper() == CAL_CONFIRM_PHRASE))
+        dialog.connect('response', lambda _d, r: r == 'write' and self._calibrate(target, permanent=True))
+        dialog.present(self)
 
     def _page_lighting(self):
         b = self.b
@@ -1464,6 +2158,14 @@ class App(Adw.Application):
             if node:
                 window.get_renderer().render_texture(node, None).save_to_png(f'{prefix}-{name}.png')
 
+        def scroll_bottom(widget):
+            child = widget
+            while child is not None and not isinstance(child, Gtk.ScrolledWindow):
+                child = child.get_first_child()
+            if child:
+                adj = child.get_vadjustment()
+                adj.set_value(adj.get_upper())
+
         def dialogs():
             steps = [
                 lambda: window._edit_chord_function(None),
@@ -1472,6 +2174,22 @@ class App(Adw.Application):
                 lambda: window._edit_chord_assignment(None),
                 lambda: render_now('d2-new-chord'),
                 lambda: window._last_dialog_save.emit('clicked'),
+                lambda: (window.trigger_editors['both']._set_effect(default_trigger_effect('zoned-feedback')),
+                         window.trigger_editors['both'].load(), window.stack.set_visible_child_name('triggers')),
+                lambda: scroll_bottom(window.stack.get_child_by_name('triggers')),
+                lambda: render_now('d0-trigger-editor'),
+                lambda: window.stack.set_visible_child_name('sticks'),
+                lambda: window._calibrate(CAL_CENTRE),
+                lambda: None, lambda: None, lambda: None,
+                lambda: render_now('d3-centre-done'),
+                lambda: window._calibrate(CAL_RANGE),
+                lambda: None, lambda: None, lambda: None,
+                lambda: render_now('d4-sweep'),
+                *[lambda: None] * 4,
+                lambda: print('finish sensitive:', window._sweep_finish.get_sensitive(), flush=True),
+                lambda: window._sweep_finish.emit('clicked') if window._sweep_finish.get_sensitive() else None,
+                lambda: None, lambda: None,
+                lambda: render_now('d5-range-done'),
                 lambda: self.quit(),
             ]
             for i, step in enumerate(steps):

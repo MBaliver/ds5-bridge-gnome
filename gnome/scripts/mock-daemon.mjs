@@ -25,6 +25,22 @@ class Mock extends Interface {
     console.log('call', channel, argsJson);
     const name = channel.split(':')[1];
     if (name === 'getStatus') return JSON.stringify(snapshot);
+    // Calibration and input, enough to drive the UI flows.
+    if (name === 'sendStickCalibration') { this.cal = { op: args[0], target: args[1] }; return 'null'; }
+    if (name === 'readCalibrationStatus') {
+      const c = this.cal ?? { op: 1, target: 1 };
+      return JSON.stringify({ received: true, bytes: [], target: c.target, code: c.op === 2 ? 2 : 1 });
+    }
+    if (name === 'setNvsUnlocked' || name === 'holdInputForwarding') return 'null';
+    if (name === 'setRawTriggerEffect') return JSON.stringify(snapshot);
+    if (name === 'readControllerInput') {
+      // Both sticks circle the rim: clockwise for one lap, then counterclockwise. 3 s per lap.
+      this.t0 ??= Date.now();
+      const t = (Date.now() - this.t0) / 3000;
+      const a = (t < 1.1 ? t : 2.2 - t) * 2 * Math.PI;
+      const x = Math.round(128 + 127 * Math.cos(a)), y = Math.round(128 + 127 * Math.sin(a));
+      return JSON.stringify({ leftStickX: x, leftStickY: y, rightStickX: x, rightStickY: y, raw: [] });
+    }
     if (name === 'getVersion') return '"mock"';
     if (name === 'selectControllerProfile') snapshot.settings.selectedControllerProfileId = args[0];
     else if (name === 'sleepController') {
