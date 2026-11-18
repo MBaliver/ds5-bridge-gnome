@@ -32,7 +32,6 @@ MUTE_MODES = [('normal', 'Mute Microphone'), ('quiet', 'Quiet Mode Toggle'),
               ('keyboard', 'Keyboard Key'), ('chord', 'Chord Starter')]
 TRIGGER_TESTS = [('feedback', 'Feedback'), ('weapon', 'Weapon'), ('vibration', 'Vibration')]
 REACTIVE_SOURCES = [('system-audio', 'System Audio'), ('controller-audio', 'Controller Audio')]
-REACTIVE_MODES = [('mix', 'Mix With Game Haptics'), ('replace', 'Replace Game Haptics')]
 BASS_FOCUS = [('deep', 'Deep'), ('balanced', 'Balanced'), ('punchy', 'Punchy'), ('wide', 'Wide')]
 RESPONSE = [('subtle', 'Subtle'), ('balanced', 'Balanced'), ('strong', 'Strong')]
 ATTACK = [('soft', 'Soft'), ('balanced', 'Balanced'), ('fast', 'Fast'), ('sharp', 'Sharp')]
@@ -1620,7 +1619,9 @@ class Window(Adw.ApplicationWindow):
             bool(dig(s, 'settings.audioReactiveHapticsEnabled'))))
         for row in (
             *self._audio_source_row(expander),
-            b.combo('Mode', REACTIVE_MODES, lambda s: dig(s, 'settings.audioReactiveHapticsMode'), reactive('mode')),
+            b.switch('Keep Game Vibration', lambda s: dig(s, 'settings.audioReactiveHapticsMode') != 'replace',
+                     lambda on: reactive('mode')('mix' if on else 'replace'),
+                     subtitle='Off: only sound moves the motors'),
             b.scale('Strength', 0, 200, 10, lambda s: dig(s, 'settings.audioReactiveHapticsGainPercent'),
                     reactive('gainPercent')),
             b.combo('Bass Focus', BASS_FOCUS, lambda s: dig(s, 'settings.audioReactiveHapticsBassFocus'), reactive('bassFocus')),
