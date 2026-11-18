@@ -73,8 +73,16 @@ const service = new BridgeService(
   const isDevice = (s: unknown) => typeof s === 'object' && s !== null && (s as { kind?: string }).kind === 'output-device';
   svc.setAudioReactiveHapticsConfig = async (config) => {
     const wanted = 'source' in config ? config.source : settingsStore.get().audioReactiveHapticsSource;
-    const result = await original(config);
-    if (!isDevice(wanted) || isDevice(settingsStore.get().audioReactiveHapticsSource)) return result;
+    if (!isDevice(wanted)) return original(config);
+    // Upstream's own snapshot briefly says 'system-audio'; keep the mix watchdog quiet meanwhile.
+    const wasSwitching = mixSwitching;
+    mixSwitching = true;
+    try {
+      await original(config);
+    } finally {
+      mixSwitching = wasSwitching;
+    }
+    if (isDevice(settingsStore.get().audioReactiveHapticsSource)) return service.getSnapshot();
     svc.snapshot.settings = settingsStore.update({ audioReactiveHapticsSource: wanted } as never);
     await svc.updateSystemAudioHapticsEngine();
     svc.emitSnapshot();
