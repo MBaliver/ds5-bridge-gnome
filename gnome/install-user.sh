@@ -31,3 +31,16 @@ systemctl --user daemon-reload
 systemctl --user enable --now ds5-bridged.service
 update-desktop-database "$data/applications" 2>/dev/null || true
 echo "ds5-bridged: $(systemctl --user is-active ds5-bridged.service)"
+
+# Quick Settings tile (GNOME Shell extension)
+uuid=ds5-bridge@matheus
+ext="$data/gnome-shell/extensions/$uuid"
+rm -rf "$ext" && mkdir -p "$ext" && cp shell-extension/* "$ext/"
+gnome-extensions enable "$uuid" 2>/dev/null || {
+  cur=$(gsettings get org.gnome.shell enabled-extensions)
+  case "$cur" in *"$uuid"*) ;; *)
+    gsettings set org.gnome.shell enabled-extensions \
+      "$(python3 -c "import ast,sys; l=ast.literal_eval(sys.argv[1].replace('@as ','')); l.append(sys.argv[2]); print(l)" "$cur" "$uuid")";;
+  esac
+  echo "Quick Settings tile: log out and back in once to load it"
+}

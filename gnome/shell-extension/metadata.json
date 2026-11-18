@@ -1,0 +1,7 @@
+{
+  "uuid": "ds5-bridge@matheus",
+  "name": "DS5 Bridge",
+  "description": "DualSense via DS5 Bridge in Quick Settings: battery, profiles, emulated controller, haptics, mic and light bar. Needs the ds5-bridged service.",
+  "shell-version": ["51"],
+  "version": 1
+}
