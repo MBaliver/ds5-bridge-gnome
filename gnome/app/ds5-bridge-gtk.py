@@ -28,7 +28,7 @@ CLASSIC_UI = os.path.join(HERE, '..', 'bin', 'ds5-bridge-ui')
 PERSONAS = [('dualsense', 'DualSense'), ('dualsense-edge', 'DualSense Edge'),
             ('ds4', 'DualShock 4'), ('xbox', 'Xbox')]
 POLLING = [('250', '250 Hz'), ('500', '500 Hz'), ('1000', '1000 Hz')]
-MUTE_MODES = [('normal', 'Mute Microphone'), ('quiet', 'Quiet Mode'),
+MUTE_MODES = [('normal', 'Mute Microphone'), ('quiet', 'Quiet Mode Toggle'),
               ('keyboard', 'Keyboard Key'), ('chord', 'Chord Starter')]
 TRIGGER_TESTS = [('feedback', 'Feedback'), ('weapon', 'Weapon'), ('vibration', 'Vibration')]
 REACTIVE_SOURCES = [('system-audio', 'System Audio'), ('controller-audio', 'Controller Audio')]
@@ -41,6 +41,153 @@ RELEASE = [('tight', 'Tight'), ('balanced', 'Balanced'), ('smooth', 'Smooth'), (
 STANDARD_FEEDBACK_MAX = 200
 BOOSTED_FEEDBACK_MAX = 500
 POWER_SAVING_CAP = 60
+
+# Artwork shipped with upstream (repo-root assets/).
+ASSETS = os.path.join(HERE, '..', '..', 'assets')
+CONTROLLER_ART = os.path.join(ASSETS, 'controllers', 'dualsense-edge-front.svg')
+GLYPH_DIR = os.path.join(ASSETS, 'glyphs', 'ps5-buttons-outline-white', 'svg')
+
+# Button remapping, mirroring upstream App.tsx (REMAP_BUTTONS & co).
+REMAP_LABELS = {
+    'l2': 'L2', 'l1': 'L1', 'create': 'Create', 'dpad-up': 'D-pad Up', 'dpad-left': 'D-pad Left',
+    'dpad-down': 'D-pad Down', 'dpad-right': 'D-pad Right', 'l3': 'L3', 'r2': 'R2', 'r1': 'R1',
+    'options': 'Options', 'triangle': 'Triangle', 'circle': 'Circle', 'cross': 'Cross', 'square': 'Square',
+    'r3': 'R3', 'lb': 'Left Back Button', 'rb': 'Right Back Button', 'lfn': 'Left Function Button',
+    'rfn': 'Right Function Button', 'ps': 'PS Button',
+}
+REMAP_GLYPHS = {
+    'l2': 'L2', 'l1': 'L1', 'create': 'Create', 'dpad-up': 'D-Pad Up', 'dpad-left': 'D-Pad Left',
+    'dpad-down': 'D-Pad Down', 'dpad-right': 'D-Pad Right', 'l3': 'Left Stick Click', 'r2': 'R2', 'r1': 'R1',
+    'options': 'Options', 'triangle': 'Triangle', 'circle': 'Circle', 'cross': 'Cross', 'square': 'Square',
+    'r3': 'Right Stick Click', 'ps': 'Home',
+}
+REMAP_TEXT_GLYPHS = {'lb': 'LB', 'rb': 'RB', 'lfn': 'LFN', 'rfn': 'RFN'}
+REMAP_LEFT = ['l2', 'l1', 'create', 'dpad-up', 'dpad-right', 'dpad-down', 'dpad-left', 'l3']
+REMAP_RIGHT = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'r3', 'square']
+REMAP_EDGE = ['lb', 'rb', 'lfn', 'rfn']
+REMAP_STANDARD_TARGETS = ['triangle', 'circle', 'cross', 'square', 'dpad-up', 'dpad-right', 'dpad-down',
+                          'dpad-left', 'l1', 'r1', 'l2', 'r2', 'l3', 'r3', 'create', 'options']
+REMAP_TARGETS = REMAP_STANDARD_TARGETS + ['ps']
+
+# Mute button as a keyboard key (USB HID usages, upstream MUTE_KEY_OPTIONS).
+MUTE_KEYS = ([(f'F{i + 1}', 0x3A + i) for i in range(12)] + [(f'F{i + 13}', 0x68 + i) for i in range(12)]
+             + [(chr(65 + i), 0x04 + i) for i in range(26)]
+             + [(str((i + 1) % 10), 0x1E + i) for i in range(10)]
+             + [('Enter', 0x28), ('Escape', 0x29), ('Backspace', 0x2A), ('Tab', 0x2B), ('Space', 0x2C),
+                ('-', 0x2D), ('=', 0x2E), ('[', 0x2F), (']', 0x30), ('\\', 0x31), (';', 0x33), ("'", 0x34),
+                ('`', 0x35), (',', 0x36), ('.', 0x37), ('/', 0x38), ('Print Screen', 0x46), ('Scroll Lock', 0x47),
+                ('Pause', 0x48), ('Insert', 0x49), ('Home', 0x4A), ('Page Up', 0x4B), ('Delete', 0x4C),
+                ('End', 0x4D), ('Page Down', 0x4E), ('Right Arrow', 0x4F), ('Left Arrow', 0x50),
+                ('Down Arrow', 0x51), ('Up Arrow', 0x52)])
+MUTE_MODIFIERS = [('Ctrl', 0x01), ('Shift', 0x02), ('Alt', 0x04), ('Super', 0x08)]
+MUTE_BEHAVIORS = [('tap', 'Tap Once'), ('hold', 'Hold While Pressed')]
+
+# Chords (upstream protocol.ts / App.tsx).
+MAX_CHORD_ASSIGNMENTS = 16
+MAX_CHORD_FUNCTION_NAME = 16
+MAX_KEYBOARD_FUNCTION_KEYS = 4
+CHORD_STARTERS = [('ps', 'PS Button'), ('lfn', 'Left Function'), ('rfn', 'Right Function'), ('mute', 'Mute Button')]
+CHORD_EDGE_RESERVED = {'triangle', 'circle', 'cross', 'square'}
+CHORD_FUNCTION_TYPES = [('keyboard', 'Keyboard Shortcut'), ('media', 'Media Action'),
+                        ('controller-setting', 'Controller Setting')]
+CHORD_MEDIA = [('play-pause', 'Play / Pause'), ('next-track', 'Next Track'), ('previous-track', 'Previous Track'),
+               ('mute', 'Mute Output'), ('volume-up', 'Volume Up'), ('volume-down', 'Volume Down')]
+CHORD_SETTINGS = [
+    ('toggle-audio-haptics', 'Toggle Audio-Reactive Haptics'), ('toggle-lightbar-override', 'Toggle Light Bar Override'),
+    ('toggle-mic-mute', 'Toggle Microphone'), ('sleep-controller', 'Turn Off Controller'),
+    ('show-battery', 'Show Battery Level'), ('persona-dualsense', 'Emulate DualSense'),
+    ('persona-ds4', 'Emulate DualShock 4'), ('persona-xbox', 'Emulate Xbox'),
+    ('speaker-up', 'Speaker Volume Up'), ('speaker-down', 'Speaker Volume Down'),
+    ('mic-up', 'Microphone Volume Up'), ('mic-down', 'Microphone Volume Down'),
+    ('haptics-up', 'Haptics Stronger'), ('haptics-down', 'Haptics Weaker'),
+    ('rumble-up', 'Rumble Stronger'), ('rumble-down', 'Rumble Weaker'),
+    ('triggers-up', 'Trigger Intensity Up'), ('triggers-down', 'Trigger Intensity Down'),
+    ('lighting-up', 'Light Bar Brighter'), ('lighting-down', 'Light Bar Dimmer'),
+]
+CHORD_KEYS = ([(k, k) for k in ('Esc', 'Enter', 'Space', 'Tab', 'Backspace', 'Delete', 'Insert', 'Home', 'End',
+                                 'Page Up', 'Page Down')]
+              + [('Up Arrow', 'Up'), ('Down Arrow', 'Down'), ('Left Arrow', 'Left'), ('Right Arrow', 'Right')]
+              + [(k, k) for k in ('Print Screen', 'Pause', 'Caps Lock', 'Num Lock', 'Scroll Lock', 'Menu')]
+              + [(f'F{i}', f'F{i}') for i in range(1, 25)]
+              + [(c, c) for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890']
+              + [(f'Numpad {d}', f'Numpad{d}') for d in '0123456789'])
+CHORD_MODIFIERS = [('Ctrl', 'Ctrl'), ('Shift', 'Shift'), ('Alt', 'Alt'), ('Super', 'Win')]
+
+
+def step_action(action):
+    return action.endswith('-up') or action.endswith('-down')
+
+
+def default_step(action):
+    return 20 if action.split('-')[0] in ('haptics', 'rumble') else 10
+
+
+def label_of(options, value, fallback=None):
+    return next((label for key, label in options if key == value), fallback if fallback is not None else str(value))
+
+
+def chord_function_summary(func):
+    kind = func.get('type')
+    if kind == 'keyboard':
+        return ' + '.join('Super' if k == 'Win' else k for k in func.get('keys', []))
+    if kind == 'media':
+        return label_of(CHORD_MEDIA, func.get('action'))
+    text = label_of(CHORD_SETTINGS, func.get('action'))
+    return f'{text} ({func.get("stepPercent")}%)' if step_action(func.get('action', '')) else text
+
+
+def new_id(prefix):
+    return f'{prefix}-{int(time.time() * 1000):x}-{os.urandom(3).hex()}'
+
+
+class Glyphs:
+    """Upstream's white outline PS5 button glyphs, recolored to the theme's text color."""
+
+    def __init__(self):
+        self.cache = {}
+
+    def texture(self, name, size, rgba):
+        color = '#{:02x}{:02x}{:02x}'.format(*(round(c * 255) for c in (rgba.red, rgba.green, rgba.blue)))
+        key = (name, size, color)
+        if key not in self.cache:
+            path = os.path.join(GLYPH_DIR, f'{name}.svg')
+            try:
+                with open(path, encoding='utf-8') as fh:
+                    svg = fh.read()
+            except OSError:
+                return None
+            svg = svg.replace('#fff', color).replace('#FFF', color)
+            gi.require_version('GdkPixbuf', '2.0')
+            from gi.repository import GdkPixbuf
+            loader = GdkPixbuf.PixbufLoader()
+            loader.set_size(size * 2, size * 2)  # 2x for HiDPI; GtkPicture scales down
+            loader.write(svg.encode())
+            loader.close()
+            ok, png = loader.get_pixbuf().save_to_bufferv('png', [], [])
+            self.cache[key] = Gdk.Texture.new_from_bytes(GLib.Bytes.new(png))
+        return self.cache[key]
+
+
+GLYPHS = Glyphs()
+
+
+def glyph_widget(button_id, size=24):
+    """A glyph image for a remap button id (text pill for the Edge-only buttons)."""
+    if button_id in REMAP_TEXT_GLYPHS:
+        label = Gtk.Label(label=REMAP_TEXT_GLYPHS[button_id], width_request=size, valign=Gtk.Align.CENTER)
+        label.add_css_class('caption-heading')
+        label.add_css_class('ds5-pill')
+        return label
+    picture = Gtk.Picture(width_request=size, height_request=size, can_shrink=True,
+                          content_fit=Gtk.ContentFit.CONTAIN, valign=Gtk.Align.CENTER)
+
+    def paint(*_):
+        texture = GLYPHS.texture(REMAP_GLYPHS.get(button_id, ''), size, picture.get_color())
+        if texture:
+            picture.set_paintable(texture)
+    picture.connect('realize', paint)
+    Adw.StyleManager.get_default().connect('notify::dark', paint)
+    return picture
 
 
 def controller_label(kind):
@@ -308,6 +455,8 @@ class Window(Adw.ApplicationWindow):
             ('triggers', 'Triggers & Sticks', 'find-location-symbolic', self._page_triggers),
             ('lighting', 'Lighting', 'display-brightness-symbolic', self._page_lighting),
             ('buttons', 'Buttons', 'input-keyboard-symbolic', self._page_buttons),
+            ('remapping', 'Remapping', 'media-playlist-shuffle-symbolic', self._page_remapping),
+            ('chords', 'Chords', 'input-dialpad-symbolic', self._page_chords),
             ('system', 'System', 'emblem-system-symbolic', self._page_system),
         ]
 
@@ -437,13 +586,79 @@ class Window(Adw.ApplicationWindow):
             page.add(g)
         return page
 
+    def _profile_row(self, title, subtitle, list_key, selected_key, prefix, select, save, update, rename, delete,
+                     reset=None):
+        """ComboRow over a profile list with a ⋮ menu: save new, update, rename, delete (and reset)."""
+        b = self.b
+        ids = []
+        row = Adw.ComboRow(title=title, subtitle=subtitle, model=Gtk.StringList())
+
+        def changed(*_):
+            if not b.syncing and row.get_selected() < len(ids):
+                self.call(select, ids[row.get_selected()])
+        row.connect('notify::selected', changed)
+
+        def sync(s):
+            items = dig(s, f'settings.{list_key}', []) or []
+            names = [p['name'] for p in items]
+            model = row.get_model()
+            if [p['id'] for p in items] != ids or names != [model.get_string(i) for i in range(model.get_n_items())]:
+                ids[:] = [p['id'] for p in items]
+                row.set_model(Gtk.StringList.new(names))
+            current = dig(s, f'settings.{selected_key}')
+            if current in ids:
+                row.set_selected(ids.index(current))
+        b.syncers.append(sync)
+
+        def current():
+            items = dig(self.snapshot, f'settings.{list_key}', []) or []
+            i = row.get_selected()
+            return items[i] if 0 <= i < len(items) else None
+
+        handlers = {
+            'save-new': lambda: self._ask_name('New Profile', '', 'Save', lambda n: self.call(save, n)),
+            'update': lambda: (p := current()) and self.call(update, p['id'], done=lambda _: self.toast(f'“{p["name"]}” updated')),
+            'rename': lambda: (p := current()) and self._ask_name(
+                'Rename Profile', p['name'], 'Rename', lambda n: self.call(rename, p['id'], n)),
+            'delete': lambda: (p := current()) and self._confirm(
+                f'Delete “{p["name"]}”?', 'This profile will be removed permanently.', 'Delete',
+                lambda: self.call(delete, p['id'])),
+        }
+        if reset:
+            handlers['reset'] = lambda: self._confirm(
+                'Reset All Buttons?', 'Every button goes back to its normal function.', 'Reset', lambda: self.call(reset))
+        actions = Gio.SimpleActionGroup()
+        for name, fn in handlers.items():
+            action = Gio.SimpleAction.new(name, None)
+            action.connect('activate', lambda _a, _p, fn=fn: fn())
+            actions.add_action(action)
+        self.insert_action_group(prefix, actions)
+        menu = Gio.Menu()
+        menu.append('Save Current Settings as New Profile…', f'{prefix}.save-new')
+        menu.append('Update Profile With Current Settings', f'{prefix}.update')
+        section = Gio.Menu()
+        section.append('Rename…', f'{prefix}.rename')
+        section.append('Delete…', f'{prefix}.delete')
+        menu.append_section(None, section)
+        if reset:
+            tail = Gio.Menu()
+            tail.append('Reset All Buttons…', f'{prefix}.reset')
+            menu.append_section(None, tail)
+        row.add_suffix(Gtk.MenuButton(icon_name='view-more-symbolic', menu_model=menu, valign=Gtk.Align.CENTER,
+                                      tooltip_text='Profile Actions', css_classes=['flat']))
+        return row
+
     def _page_controller(self):
         b = self.b
         connected = lambda s: dig(s, 'status.controllerConnected')  # noqa: E731
 
         # Hero, in the spirit of Settings' device pages.
-        icon = Gtk.Image(icon_name='input-gaming-symbolic', pixel_size=96)
-        icon.add_css_class('dim-label')
+        # Upstream's DualSense artwork, as on its controller card.
+        icon = Gtk.Picture.new_for_filename(CONTROLLER_ART)
+        icon.set_can_shrink(True)
+        icon.set_content_fit(Gtk.ContentFit.CONTAIN)
+        icon.set_size_request(240, 154)
+        icon.set_halign(Gtk.Align.CENTER)
         title = Gtk.Label(css_classes=['title-1'])
         subtitle = Gtk.Label(css_classes=['dim-label'])
         level = Gtk.LevelBar(min_value=0, max_value=100, width_request=220, halign=Gtk.Align.CENTER)
@@ -469,58 +684,11 @@ class Window(Adw.ApplicationWindow):
             icon.set_opacity(1 if on else 0.5)
         b.syncers.append(hero_sync)
 
-        profile_ids = []
-        profiles = Adw.ComboRow(title='Profile', subtitle='Settings that follow this controller')
-        profiles.set_model(Gtk.StringList())
-
-        def on_profile(*_):
-            if not b.syncing and profiles.get_selected() < len(profile_ids):
-                self.call('bridge:selectControllerProfile', profile_ids[profiles.get_selected()])
-        profiles.connect('notify::selected', on_profile)
-
-        def profiles_sync(s):
-            items = dig(s, 'settings.controllerProfiles', [])
-            ids = [p['id'] for p in items]
-            if ids != profile_ids or [p['name'] for p in items] != [
-                    profiles.get_model().get_string(i) for i in range(profiles.get_model().get_n_items())]:
-                profile_ids[:] = ids
-                profiles.set_model(Gtk.StringList.new([p['name'] for p in items]))
-            current = dig(s, 'settings.selectedControllerProfileId')
-            if current in profile_ids:
-                profiles.set_selected(profile_ids.index(current))
-        b.syncers.append(profiles_sync)
-
-        def current_profile():
-            i = profiles.get_selected()
-            items = dig(self.snapshot, 'settings.controllerProfiles', [])
-            return items[i] if 0 <= i < len(items) else None
-
-        actions = Gio.SimpleActionGroup()
-        for name, fn in {
-            'save-new': lambda: self._ask_name('New Profile', '', 'Save',
-                                               lambda n: self.call('bridge:saveControllerProfile', n)),
-            'update': lambda: (p := current_profile()) and self.call('bridge:updateControllerProfile', p['id'],
-                                                                     done=lambda _: self.toast(f'“{p["name"]}” updated')),
-            'rename': lambda: (p := current_profile()) and self._ask_name(
-                'Rename Profile', p['name'], 'Rename', lambda n: self.call('bridge:renameControllerProfile', p['id'], n)),
-            'delete': lambda: (p := current_profile()) and self._confirm(
-                f'Delete “{p["name"]}”?', 'This profile will be removed permanently.', 'Delete',
-                lambda: self.call('bridge:deleteControllerProfile', p['id'])),
-        }.items():
-            action = Gio.SimpleAction.new(name, None)
-            action.connect('activate', lambda _a, _p, fn=fn: fn())
-            actions.add_action(action)
-        self.insert_action_group('profile', actions)
-        profile_menu = Gio.Menu()
-        profile_menu.append('Save Current Settings as New Profile…', 'profile.save-new')
-        profile_menu.append('Update Profile With Current Settings', 'profile.update')
-        section = Gio.Menu()
-        section.append('Rename…', 'profile.rename')
-        section.append('Delete…', 'profile.delete')
-        profile_menu.append_section(None, section)
-        profiles.add_suffix(Gtk.MenuButton(icon_name='view-more-symbolic', menu_model=profile_menu,
-                                           valign=Gtk.Align.CENTER, tooltip_text='Profile Actions',
-                                           css_classes=['flat']))
+        profiles = self._profile_row(
+            'Profile', 'Settings that follow this controller', 'controllerProfiles', 'selectedControllerProfileId',
+            prefix='profile', select='bridge:selectControllerProfile', save='bridge:saveControllerProfile',
+            update='bridge:updateControllerProfile', rename='bridge:renameControllerProfile',
+            delete='bridge:deleteControllerProfile')
 
         test_row = Adw.ActionRow(title='Test', subtitle='Check that output reaches the controller')
         for label, channel in (('Haptics', 'bridge:testHaptics'), ('Speaker', 'bridge:testSpeaker')):
@@ -549,13 +717,17 @@ class Window(Adw.ApplicationWindow):
 
     def _page_devices(self):
         b = self.b
-        known = Adw.PreferencesGroup(title='Paired Controllers')
+        known = Adw.PreferencesGroup(title='Paired Controllers',
+                                     description='Each controller can load its own profile and button layout.')
         known_rows = []
         last = {'key': None}
 
         def known_sync(s):
-            history = dig(s, 'settings.controllerHistory', []) or []
-            key = json.dumps(history)
+            st = s.get('settings', {})
+            history = st.get('controllerHistory', []) or []
+            key = json.dumps([history, st.get('controllerBindings'), st.get('buttonRemappingBindings'),
+                              [(p['id'], p['name']) for p in st.get('controllerProfiles', [])],
+                              [(p['id'], p['name']) for p in st.get('buttonRemappingProfiles', [])]])
             if key == last['key']:
                 return
             last['key'] = key
@@ -566,13 +738,22 @@ class Window(Adw.ApplicationWindow):
                 row = Adw.ActionRow(title='No controllers yet', subtitle='Pair a controller to see it here')
                 known.add(row)
                 known_rows.append(row)
+
+            def binding_row(title, profiles, current, channel, mac):
+                options = [(None, 'Not Linked')] + [(p['id'], p['name']) for p in profiles]
+                row = Adw.ComboRow(title=title, model=Gtk.StringList.new([label for _, label in options]))
+                ids = [k for k, _ in options]
+                row.set_selected(ids.index(current) if current in ids else 0)
+                row.connect('notify::selected', lambda r: self.call(channel, mac, ids[r.get_selected()]))
+                return row
+
             for entry in history:
                 mac = ':'.join(entry['mac'][i:i + 2] for i in range(0, len(entry['mac']), 2)).upper()
                 seen = GLib.DateTime.new_from_unix_local(entry['lastSeenAt'] // 1000).format('%x %X')
                 bits = [mac, f'last seen {seen}']
                 if entry.get('lastBatteryPercent') is not None:
                     bits.append(f'{entry["lastBatteryPercent"]}%')
-                row = Adw.ActionRow(title=controller_label(entry.get('controllerType')), subtitle=' · '.join(bits))
+                row = Adw.ExpanderRow(title=controller_label(entry.get('controllerType')), subtitle=' · '.join(bits))
                 row.add_prefix(Gtk.Image(icon_name='input-gaming-symbolic'))
                 forget = Gtk.Button(icon_name='user-trash-symbolic', valign=Gtk.Align.CENTER,
                                     tooltip_text='Forget Controller', css_classes=['flat'])
@@ -580,6 +761,12 @@ class Window(Adw.ApplicationWindow):
                     f'Forget {label}?', 'The controller will need to be paired again.', 'Forget',
                     lambda: self.call('bridge:forgetControllerPairing', m)))
                 row.add_suffix(forget)
+                row.add_row(binding_row('Profile', st.get('controllerProfiles', []),
+                                        (st.get('controllerBindings') or {}).get(entry['mac']),
+                                        'bridge:setControllerBinding', entry['mac']))
+                row.add_row(binding_row('Remapping Profile', st.get('buttonRemappingProfiles', []),
+                                        (st.get('buttonRemappingBindings') or {}).get(entry['mac']),
+                                        'bridge:setButtonRemappingBinding', entry['mac']))
                 known.add(row)
                 known_rows.append(row)
         b.syncers.append(known_sync)
@@ -747,27 +934,426 @@ class Window(Adw.ApplicationWindow):
                            self.setter('bridge:setPlayerLedEnabled'))),
         )
 
+    # ---- input: buttons, remapping, chords
+
+    def _is_edge(self, s):
+        """Show Edge-only controls for a connected Edge, else the last controller seen (like upstream)."""
+        status = s.get('status') or {}
+        if status.get('controllerConnected') and status.get('controllerType') not in (None, 'unknown'):
+            return status['controllerType'] == 'dualsense-edge'
+        history = dig(s, 'settings.controllerHistory', []) or []
+        if history:
+            return max(history, key=lambda e: e.get('lastSeenAt', 0)).get('controllerType') == 'dualsense-edge'
+        return False
+
+    def _mute_chord_starter_active(self, s):
+        st = s.get('settings', {})
+        return st.get('muteButtonMode') == 'chord' or (
+            st.get('muteButtonMode') == 'keyboard' and st.get('muteKeyboardChordStarterEnabled'))
+
+    def _send_mute(self, **changes):
+        st = self.snapshot['settings']
+        value = {
+            'mode': st['muteButtonMode'], 'usage': st['muteKeyboardUsage'], 'modifiers': st['muteKeyboardModifiers'],
+            'behavior': st['muteKeyboardBehavior'], 'starter': st['muteKeyboardChordStarterEnabled'], **changes}
+        self.call('bridge:setMuteButtonAction', value['mode'], value['usage'], value['modifiers'],
+                  value['behavior'], value['starter'])
+
     def _page_buttons(self):
         b = self.b
+        keyboard = lambda s: dig(s, 'settings.muteButtonMode') == 'keyboard'  # noqa: E731
 
-        def set_mute_mode(mode):
-            st = self.snapshot['settings']
-            self.call('bridge:setMuteButtonAction', mode, st['muteKeyboardUsage'], st['muteKeyboardModifiers'],
-                      st['muteKeyboardBehavior'], st['muteKeyboardChordStarterEnabled'])
+        key_row = b.combo('Key', [(usage, label) for label, usage in MUTE_KEYS],
+                          lambda s: dig(s, 'settings.muteKeyboardUsage'), lambda usage: self._send_mute(usage=usage))
+        key_row.set_enable_search(True)
+
+        modifiers_row = Adw.ActionRow(title='Modifiers')
+        box = Gtk.Box(css_classes=['linked'], valign=Gtk.Align.CENTER)
+        toggles = []
+        for label, bit in MUTE_MODIFIERS:
+            toggle = Gtk.ToggleButton(label=label)
+            toggle._bit = bit
+
+            def flipped(button):
+                if b.syncing:
+                    return
+                b._user_touch(box)
+                mask = sum(t._bit for t in toggles if t.get_active())
+                self._send_mute(modifiers=mask)
+            toggle.connect('toggled', flipped)
+            toggles.append(toggle)
+            box.append(toggle)
+        modifiers_row.add_suffix(box)
+
+        def modifiers_sync(s):
+            if b._held(box):
+                return
+            mask = dig(s, 'settings.muteKeyboardModifiers', 0) or 0
+            for t in toggles:
+                t.set_active(bool(mask & t._bit))
+        b.syncers.append(modifiers_sync)
+
+        keyboard_rows = [
+            key_row, modifiers_row,
+            b.combo('Behavior', MUTE_BEHAVIORS, lambda s: dig(s, 'settings.muteKeyboardBehavior'),
+                    lambda v: self._send_mute(behavior=v)),
+            b.switch('Also Starts Chords', lambda s: dig(s, 'settings.muteKeyboardChordStarterEnabled'),
+                     lambda v: self._send_mute(starter=v), subtitle='Hold Mute and press a button to run a chord'),
+        ]
+        for row in keyboard_rows:
+            b.visible_when(row, keyboard)
 
         return self._page(
             group('Mute Button', None,
-                  b.combo('Action', MUTE_MODES, lambda s: dig(s, 'settings.muteButtonMode'), set_mute_mode),
+                  b.combo('Action', MUTE_MODES, lambda s: dig(s, 'settings.muteButtonMode'),
+                          lambda mode: self._send_mute(mode=mode)),
+                  *keyboard_rows),
+            group('Shortcuts', None,
                   b.switch('Sleep Shortcut', lambda s: dig(s, 'settings.sleepKeybindEnabled'),
                            self.setter('bridge:setSleepKeybindEnabled'),
-                           subtitle='Hold PS and Mute to turn the controller off')),
+                           subtitle='PS + Triangle turns the controller off'),
+                  b.switch('Speaker Volume Shortcut', lambda s: dig(s, 'settings.speakerVolumeShortcutEnabled'),
+                           self.setter('bridge:setSpeakerVolumeShortcutEnabled'),
+                           subtitle='PS + D-pad Up/Down changes the speaker volume')),
             group('Touchpad', None,
                   b.switch('Use Touchpad as Mouse', lambda s: dig(s, 'settings.touchpadMouseEnabled'),
                            self.setter('bridge:setTouchpadMouseEnabled'))),
-            group(None, 'Button remapping, chord functions and keyboard keys for the mute button are in the classic '
-                        'interface.',
-                  button_row('Button Remapping', 'Open', lambda: self.get_application().activate_action('classic'))),
         )
+
+    def _page_remapping(self):
+        b = self.b
+        profile = self._profile_row(
+            'Remapping Profile', 'Button layouts follow the controller too', 'buttonRemappingProfiles',
+            'selectedButtonRemappingProfileId', prefix='remap', select='bridge:selectButtonRemappingProfile',
+            save='bridge:saveButtonRemappingProfile', update='bridge:updateButtonRemappingProfile',
+            rename='bridge:renameButtonRemappingProfile', delete='bridge:deleteButtonRemappingProfile',
+            reset='bridge:restoreButtonRemappingDefaults')
+        summary = Adw.PreferencesGroup()
+
+        def summary_sync(s):
+            draft = dig(s, 'settings.buttonRemappingDraft', {}) or {}
+            changed = sum(1 for k, v in draft.items() if k != v)
+            summary.set_description('No buttons remapped' if not changed else
+                                    f'{changed} button{"s" if changed != 1 else ""} remapped')
+        b.syncers.append(summary_sync)
+        summary.add(profile)
+
+        def button_rows(ids):
+            rows = []
+            for button in ids:
+                targets = REMAP_TARGETS + ([button] if button in REMAP_EDGE else [])
+                labels = [REMAP_LABELS[t] for t in targets]
+                row = b.combo(REMAP_LABELS[button], list(zip(targets, labels)),
+                              lambda s, k=button: dig(s, f'settings.buttonRemappingDraft.{k}'),
+                              lambda target, k=button: self.call('bridge:setButtonRemap', k, target))
+                row.add_prefix(glyph_widget(button))
+
+                def mark(s, row=row, k=button):
+                    target = dig(s, f'settings.buttonRemappingDraft.{k}')
+                    remapped = target not in (None, k)
+                    row.set_subtitle(f'Acts as {REMAP_LABELS.get(target, target)}' if remapped else '')
+                    (row.add_css_class if remapped else row.remove_css_class)('ds5-remapped')
+                b.syncers.append(mark)
+                rows.append(row)
+            return rows
+
+        edge = group('DualSense Edge', 'Back buttons and function buttons', *button_rows(REMAP_EDGE))
+        b.visible_when(edge, lambda s: self._is_edge(s) or any(
+            dig(s, f'settings.buttonRemappingDraft.{k}') not in (None, k) for k in REMAP_EDGE))
+        return self._page(
+            summary,
+            group('Left Side', None, *button_rows(REMAP_LEFT)),
+            group('Right Side', None, *button_rows(REMAP_RIGHT)),
+            edge,
+        )
+
+    # chords
+
+    def _chord_state(self):
+        st = self.snapshot['settings']
+        return [dict(f) for f in st.get('chordFunctions', [])], [dict(a) for a in st.get('chordAssignments', [])]
+
+    def _save_chords(self, functions, assignments):
+        self.call('bridge:setChordConfiguration', functions, assignments)
+
+    def _chord_starters(self, s, keep=None):
+        edge = self._is_edge(s)
+        mute = self._mute_chord_starter_active(s)
+        return [(k, label) for k, label in CHORD_STARTERS
+                if k == 'ps' or (k in ('lfn', 'rfn') and edge) or (k == 'mute' and mute) or k == keep]
+
+    def _chord_buttons(self, s, starter):
+        ids = REMAP_STANDARD_TARGETS + (['lb', 'rb'] if self._is_edge(s) else [])
+        return [(k, REMAP_LABELS[k]) for k in ids if starter == 'ps' or k not in CHORD_EDGE_RESERVED]
+
+    def _chord_conflict(self, s, assignment, assignments):
+        st = s['settings']
+        key = (assignment['starter'], assignment['button'])
+        if sum(1 for a in assignments if (a['starter'], a['button']) == key) > 1:
+            return 'Assigned more than once'
+        if st.get('sleepKeybindEnabled') and key == ('ps', 'triangle'):
+            return 'Taken by the Sleep Shortcut'
+        if st.get('speakerVolumeShortcutEnabled') and key in (('ps', 'dpad-up'), ('ps', 'dpad-down')):
+            return 'Taken by the Speaker Volume Shortcut'
+        if assignment['starter'] == 'mute' and not self._mute_chord_starter_active(s):
+            return 'Mute button is not set to start chords'
+        return None
+
+    def _page_chords(self):
+        b = self.b
+        functions_group = Adw.PreferencesGroup(
+            title='Functions', description='What a chord can do: press keys, control media or change a setting.')
+        add_function = Gtk.Button(icon_name='list-add-symbolic', css_classes=['flat'], tooltip_text='Add Function')
+        add_function.connect('clicked', lambda *_: self._edit_chord_function(None))
+        functions_group.set_header_suffix(add_function)
+
+        chords_group = Adw.PreferencesGroup(
+            title='Chords', description='Hold a starter button, then press another button.')
+        add_chord = Gtk.Button(icon_name='list-add-symbolic', css_classes=['flat'], tooltip_text='Add Chord')
+        add_chord.connect('clicked', lambda *_: self._edit_chord_assignment(None))
+        chords_group.set_header_suffix(add_chord)
+
+        rows = {'functions': [], 'chords': []}
+        last = {'key': None}
+
+        def rebuild(s):
+            st = s['settings']
+            key = json.dumps([st.get('chordFunctions'), st.get('chordAssignments'), self._is_edge(s),
+                              self._mute_chord_starter_active(s), st.get('sleepKeybindEnabled'),
+                              st.get('speakerVolumeShortcutEnabled')])
+            if key == last['key']:
+                return
+            last['key'] = key
+            for name, grp in (('functions', functions_group), ('chords', chords_group)):
+                for row in rows[name]:
+                    grp.remove(row)
+                rows[name].clear()
+            functions = st.get('chordFunctions', [])
+            assignments = st.get('chordAssignments', [])
+            add_chord.set_sensitive(bool(functions) and len(assignments) < MAX_CHORD_ASSIGNMENTS)
+
+            if not functions:
+                row = Adw.ActionRow(title='No functions yet', subtitle='Add one to start making chords')
+                functions_group.add(row)
+                rows['functions'].append(row)
+            for func in functions:
+                row = Adw.ActionRow(title=GLib.markup_escape_text(func['name']),
+                                    subtitle=GLib.markup_escape_text(chord_function_summary(func)), activatable=True)
+                row.add_prefix(Gtk.Image(icon_name={'keyboard': 'input-keyboard-symbolic',
+                                                    'media': 'media-playback-start-symbolic'}.get(
+                    func['type'], 'emblem-system-symbolic')))
+                row.add_suffix(Gtk.Image(icon_name='go-next-symbolic'))
+                row.connect('activated', lambda _r, f=func: self._edit_chord_function(f))
+                functions_group.add(row)
+                rows['functions'].append(row)
+
+            names = {f['id']: f['name'] for f in functions}
+            if not assignments:
+                row = Adw.ActionRow(title='No chords yet')
+                chords_group.add(row)
+                rows['chords'].append(row)
+            for assignment in assignments:
+                conflict = self._chord_conflict(s, assignment, assignments)
+                title = f'{label_of(CHORD_STARTERS, assignment["starter"])} + {REMAP_LABELS.get(assignment["button"])}'
+                row = Adw.ActionRow(title=title, activatable=True,
+                                    subtitle=GLib.markup_escape_text(conflict or names.get(assignment['functionId'],
+                                                                                           'Missing function')))
+                if conflict:
+                    row.add_css_class('error')
+                    row.add_prefix(Gtk.Image(icon_name='dialog-warning-symbolic'))
+                else:
+                    row.add_prefix(glyph_widget(assignment['button'], 24))
+                remove = Gtk.Button(icon_name='user-trash-symbolic', valign=Gtk.Align.CENTER, css_classes=['flat'],
+                                    tooltip_text='Remove Chord')
+                remove.connect('clicked', lambda _b, a=assignment: self._save_chords(
+                    self._chord_state()[0], [x for x in self._chord_state()[1] if x['id'] != a['id']]))
+                row.add_suffix(remove)
+                row.connect('activated', lambda _r, a=assignment: self._edit_chord_assignment(a))
+                chords_group.add(row)
+                rows['chords'].append(row)
+        b.syncers.append(rebuild)
+        return self._page(chords_group, functions_group)
+
+    def _dialog(self, title, content, on_save, save_label='Save', on_delete=None):
+        dialog = Adw.Dialog(title=title, content_width=440)
+        header = Adw.HeaderBar(show_start_title_buttons=False, show_end_title_buttons=False)
+        cancel = Gtk.Button(label='Cancel')
+        cancel.connect('clicked', lambda *_: dialog.close())
+        save = Gtk.Button(label=save_label, css_classes=['suggested-action'])
+        save.connect('clicked', lambda *_: on_save() is not False and dialog.close())
+        self._last_dialog_save = save  # dev snapshots press it
+        header.pack_start(cancel)
+        header.pack_end(save)
+        view = Adw.ToolbarView(content=content)
+        view.add_top_bar(header)
+        if on_delete:
+            delete = Gtk.Button(label='Delete', css_classes=['destructive-action'], halign=Gtk.Align.CENTER,
+                                margin_bottom=18)
+            delete.connect('clicked', lambda *_: (dialog.close(), on_delete()))
+            view.add_bottom_bar(delete)
+        dialog.set_child(view)
+        dialog.present(self)
+        return dialog
+
+    def _edit_chord_function(self, func):
+        func = dict(func or {'type': 'keyboard', 'keys': ['Ctrl', 'Shift', 'Esc'], 'name': ''})
+        page = Adw.PreferencesPage()
+        name = Adw.EntryRow(title='Name', text=func.get('name', ''))
+        name.connect('changed', lambda *_: name.get_text() and len(name.get_text()) > MAX_CHORD_FUNCTION_NAME
+                     and name.set_text(name.get_text()[:MAX_CHORD_FUNCTION_NAME]))
+        kind = Adw.ComboRow(title='Type', model=Gtk.StringList.new([l for _, l in CHORD_FUNCTION_TYPES]))
+        kind.set_selected([k for k, _ in CHORD_FUNCTION_TYPES].index(func['type']))
+        page.add(group(None, None, name, kind))
+
+        keys = func.get('keys', []) if func['type'] == 'keyboard' else ['Ctrl', 'Shift', 'Esc']
+        key_values = [v for _, v in CHORD_KEYS]
+        main_key = next((k for k in keys if k in key_values), 'Esc')
+        key_row = Adw.ComboRow(title='Key', enable_search=True, model=Gtk.StringList.new([l for l, _ in CHORD_KEYS]))
+        key_row.set_selected(key_values.index(main_key))
+        mods_row = Adw.ActionRow(title='Modifiers', subtitle=f'Up to {MAX_KEYBOARD_FUNCTION_KEYS - 1}')
+        mods_box = Gtk.Box(css_classes=['linked'], valign=Gtk.Align.CENTER)
+        mod_toggles = []
+        for label, value in CHORD_MODIFIERS:
+            toggle = Gtk.ToggleButton(label=label, active=value in keys)
+            toggle._value = value
+            mod_toggles.append(toggle)
+            mods_box.append(toggle)
+
+        def limit_mods(*_):
+            on = [t for t in mod_toggles if t.get_active()]
+            for t in mod_toggles:
+                t.set_sensitive(t.get_active() or len(on) < MAX_KEYBOARD_FUNCTION_KEYS - 1)
+        for t in mod_toggles:
+            t.connect('toggled', limit_mods)
+        limit_mods()
+        mods_row.add_suffix(mods_box)
+        keyboard_group = group('Keyboard Shortcut', None, mods_row, key_row)
+
+        media_row = Adw.ComboRow(title='Action', model=Gtk.StringList.new([l for _, l in CHORD_MEDIA]))
+        media_ids = [k for k, _ in CHORD_MEDIA]
+        media_row.set_selected(media_ids.index(func['action']) if func['type'] == 'media' else 0)
+        media_group = group('Media', None, media_row)
+
+        setting_ids = [k for k, _ in CHORD_SETTINGS]
+        setting_row = Adw.ComboRow(title='Action', model=Gtk.StringList.new([l for _, l in CHORD_SETTINGS]))
+        setting_row.set_selected(setting_ids.index(func['action'])
+                                 if func['type'] == 'controller-setting' else setting_ids.index('sleep-controller'))
+        step_row = Adw.SpinRow.new_with_range(1, 100, 1)
+        step_row.set_title('Step')
+        step_row.set_subtitle('How much each press changes the setting, in percent')
+        step_row.set_value(func.get('stepPercent') or default_step(setting_ids[setting_row.get_selected()]))
+        setting_group = group('Controller Setting', None, setting_row, step_row)
+
+        def on_setting(*_):
+            action = setting_ids[setting_row.get_selected()]
+            step_row.set_visible(step_action(action))
+        setting_row.connect('notify::selected', on_setting)
+        on_setting()
+        for g in (keyboard_group, media_group, setting_group):
+            page.add(g)
+
+        def on_kind(*_):
+            current = CHORD_FUNCTION_TYPES[kind.get_selected()][0]
+            keyboard_group.set_visible(current == 'keyboard')
+            media_group.set_visible(current == 'media')
+            setting_group.set_visible(current == 'controller-setting')
+        kind.connect('notify::selected', on_kind)
+        on_kind()
+
+        def save():
+            current = CHORD_FUNCTION_TYPES[kind.get_selected()][0]
+            result = {'id': func.get('id') or new_id('function'), 'type': current}
+            if current == 'keyboard':
+                result['keys'] = ([t._value for t in mod_toggles if t.get_active()]
+                                  + [key_values[key_row.get_selected()]])[:MAX_KEYBOARD_FUNCTION_KEYS]
+            elif current == 'media':
+                result['action'] = media_ids[media_row.get_selected()]
+            else:
+                action = setting_ids[setting_row.get_selected()]
+                result['action'] = action
+                result['stepPercent'] = int(step_row.get_value()) if step_action(action) else default_step(action)
+            default_name = {'keyboard': 'Shortcut', 'media': 'Media', 'controller-setting': 'Setting'}[current]
+            result['name'] = (name.get_text().strip() or default_name)[:MAX_CHORD_FUNCTION_NAME]
+            functions, assignments = self._chord_state()
+            if func.get('id'):
+                functions = [result if f['id'] == func['id'] else f for f in functions]
+            else:
+                functions.append(result)
+            self._save_chords(functions, assignments)
+
+        def delete():
+            used = [a for a in self._chord_state()[1] if a['functionId'] == func['id']]
+            body = f'It is used by {len(used)} chord{"s" if len(used) != 1 else ""}, which will be removed too.' \
+                if used else 'This function will be removed.'
+
+            def go():
+                functions, assignments = self._chord_state()
+                self._save_chords([f for f in functions if f['id'] != func['id']],
+                                  [a for a in assignments if a['functionId'] != func['id']])
+            self._confirm(f'Delete “{func["name"]}”?', body, 'Delete', go)
+
+        self._dialog('Edit Function' if func.get('id') else 'New Function', page, save,
+                     on_delete=delete if func.get('id') else None)
+
+    def _edit_chord_assignment(self, assignment):
+        s = self.snapshot
+        functions, _ = self._chord_state()
+        if not functions:
+            self.toast('Add a function first')
+            return
+        assignment = dict(assignment or {'starter': 'ps', 'button': None,
+                                         'functionId': functions[0]['id']})
+        starters = self._chord_starters(s, keep=assignment['starter'])
+        starter_ids = [k for k, _ in starters]
+        starter_row = Adw.ComboRow(title='Hold', model=Gtk.StringList.new([l for _, l in starters]))
+        starter_row.set_selected(starter_ids.index(assignment['starter']) if assignment['starter'] in starter_ids else 0)
+        button_row_ = Adw.ComboRow(title='Then Press')
+        button_ids = []
+
+        def fill_buttons(*_):
+            starter = starter_ids[starter_row.get_selected()]
+            options = self._chord_buttons(s, starter)
+            previous = button_ids[button_row_.get_selected()] if button_ids and button_row_.get_selected() < len(
+                button_ids) else assignment.get('button')
+            button_ids[:] = [k for k, _ in options]
+            button_row_.set_model(Gtk.StringList.new([l for _, l in options]))
+            if previous not in button_ids:
+                # New chord: first button that is free and not taken by a built-in shortcut.
+                taken = {(a['starter'], a['button']) for a in self._chord_state()[1]}
+                previous = next((k for k in button_ids if (starter, k) not in taken and not self._chord_conflict(
+                    s, {'starter': starter, 'button': k}, [])), button_ids[0] if button_ids else None)
+            if previous in button_ids:
+                button_row_.set_selected(button_ids.index(previous))
+        starter_row.connect('notify::selected', fill_buttons)
+        fill_buttons()
+
+        function_ids = [f['id'] for f in functions]
+        function_row = Adw.ComboRow(title='Run', model=Gtk.StringList.new([f['name'] for f in functions]))
+        if assignment['functionId'] in function_ids:
+            function_row.set_selected(function_ids.index(assignment['functionId']))
+        page = Adw.PreferencesPage()
+        page.add(group(None, None, starter_row, button_row_, function_row))
+
+        def save():
+            starter = starter_ids[starter_row.get_selected()]
+            button = button_ids[button_row_.get_selected()]
+            fns, assignments = self._chord_state()
+            clash = next((a for a in assignments if (a['starter'], a['button']) == (starter, button)
+                          and a['id'] != assignment.get('id')), None)
+            result = {'id': assignment.get('id') or new_id(f'chord-{starter}-{button}'), 'kind': 'chord',
+                      'starter': starter, 'button': button, 'functionId': function_ids[function_row.get_selected()]}
+            assignments = [a for a in assignments if a is not clash and a['id'] != result['id']] + [result] \
+                if not assignment.get('id') else [result if a['id'] == result['id'] else a
+                                                  for a in assignments if a is not clash]
+            if clash:
+                self.toast('Replaced the chord that used the same buttons')
+            self._save_chords(fns, assignments)
+
+        self._dialog('Edit Chord' if assignment.get('id') else 'New Chord', page, save,
+                     on_delete=(lambda: self._save_chords(self._chord_state()[0], [
+                         a for a in self._chord_state()[1] if a['id'] != assignment['id']]))
+                     if assignment.get('id') else None)
+
 
     def _page_system(self):
         b = self.b
@@ -846,6 +1432,16 @@ class App(Adw.Application):
         self.set_accels_for_action('app.quit', ['<Control>q'])
         self.set_accels_for_action('window.close', ['<Control>w'])
 
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        css = Gtk.CssProvider()
+        css.load_from_string('''
+            .ds5-pill { border-radius: 6px; padding: 3px 4px; background: alpha(currentColor, 0.1); }
+            row.ds5-remapped .subtitle { color: var(--accent-color); opacity: 1; }
+        ''')
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
     def do_activate(self):
         window = self.get_active_window()
         if not window:
@@ -860,9 +1456,32 @@ class App(Adw.Application):
     def _dev_snapshots(self, window, prefix):
         keys = [key for key, *_ in window.pages]
 
+        def render_now(name):
+            paintable = Gtk.WidgetPaintable(widget=window)
+            snapshot = Gtk.Snapshot()
+            paintable.snapshot(snapshot, window.get_width(), window.get_height())
+            node = snapshot.to_node()
+            if node:
+                window.get_renderer().render_texture(node, None).save_to_png(f'{prefix}-{name}.png')
+
+        def dialogs():
+            steps = [
+                lambda: window._edit_chord_function(None),
+                lambda: render_now('d1-new-function'),
+                lambda: window._last_dialog_save.emit('clicked'),
+                lambda: window._edit_chord_assignment(None),
+                lambda: render_now('d2-new-chord'),
+                lambda: window._last_dialog_save.emit('clicked'),
+                lambda: self.quit(),
+            ]
+            for i, step in enumerate(steps):
+                GLib.timeout_add(1200 * (i + 1), lambda st=step: (st(), GLib.SOURCE_REMOVE)[1])
+
         def shoot(index):
             if index >= len(keys):
-                self.quit()
+                window.stack.set_visible_child_name('chords')
+                window.content_page.set_title('Chords')
+                dialogs()
                 return GLib.SOURCE_REMOVE
             window.stack.set_visible_child_name(keys[index])
             window.content_page.set_title(window.pages[index][1])

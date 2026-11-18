@@ -31,6 +31,8 @@ class Mock extends Interface {
       snapshot.status.controllerConnected = false;
       Interface.emitPropertiesChanged(this, { Connected: false, ControllerName: '', BatteryPercent: -1 }, []);
     } else if (name === 'setMicMute') snapshot.settings.micMuted = args[0];
+    else if (name === 'setChordConfiguration') [snapshot.settings.chordFunctions, snapshot.settings.chordAssignments] = args;
+    else if (name === 'setButtonRemap') snapshot.settings.buttonRemappingDraft[args[0]] = args[1];
     else if (name.startsWith('set')) {
       const base = lower(name.slice(3));
       const key = [base, `${base}Percent`, base.replace(/Enabled$/, '') + 'Enabled']

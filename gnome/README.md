@@ -16,7 +16,7 @@ All GNOME code lives in `gnome/`, so `git merge upstream/main` does not conflict
 | Path | What |
 |---|---|
 | `daemon/` | `ds5-bridged`: upstream backend compiled as-is, run on plain Node, exported on the session bus. Replaces upstream's Electron `main.ts`. |
-| `app/` | **DS5 Bridge** GTK4/libadwaita app (Python), laid out like GNOME Settings. It covers controller, profiles, devices, audio, haptics, triggers, lighting, buttons and system. Screens it does not have yet open the classic UI. `DS5_GTK_SNAPSHOT=/prefix` renders every page to PNG. |
+| `app/` | **DS5 Bridge** GTK4/libadwaita app (Python), laid out like GNOME Settings. It covers controller (with upstream's DualSense art), profiles, devices with per-controller profile and remapping links, audio, haptics, triggers, lighting, buttons (including mute as a keyboard key), button remapping (with upstream's PS5 glyphs, recolored to the theme), chords and system. Screens it does not have yet open the classic UI. `DS5_GTK_SNAPSHOT=/prefix` renders every page to PNG. |
 | `shell-extension/` | `ds5-bridge@matheus`: a **DualSense** tile in Quick Settings (battery, profiles, emulated controller, haptics/mic/light bar, turn off) and a top-bar icon while connected. |
 | `client/` | The upstream React UI and `preload.ts`, unmodified, in an Electron window whose IPC is forwarded to the daemon. A fallback for every screen the GTK app doesn't have yet. |
 | `shared/wire.ts` | D-Bus names and the JSON codec (keeps `undefined`, like Electron's structured clone). |
