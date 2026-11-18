@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=DS5 Bridge
+Comment=Configure your DualSense and the Pico DS5 Bridge
+Exec=@PREFIX@/gnome/app/ds5-bridge-gtk.py
+Terminal=false
+Type=Application
+Icon=ds5-bridge
+Categories=Game;Settings;HardwareSettings;GTK;
+Keywords=DualSense;PlayStation;controller;gamepad;haptics;triggers;
+StartupNotify=true
+DBusActivatable=false

@@ -35,7 +35,7 @@ const IFACE_XML = `
 const IFACE_INFO = Gio.DBusNodeInfo.new_for_xml(IFACE_XML).interfaces[0];
 
 const ICON = 'input-gaming-symbolic';
-const APP_ID = 'ds5-bridge.desktop';
+const APP_ID = 'io.github.ds5bridge.App.desktop';
 const PERSONAS = [
     ['dualsense', 'DualSense'],
     ['dualsense-edge', 'DualSense Edge'],

@@ -23,6 +23,8 @@ mkdir -p "$units" "$data/dbus-1/services" "$data/applications"
 sed "s|@NODE@|$node|; s|@PREFIX@|$prefix|" data/ds5-bridged.service.in > "$units/ds5-bridged.service"
 cp data/io.github.ds5bridge.Daemon.service "$data/dbus-1/services/"
 sed "s|@PREFIX@|$prefix|" data/ds5-bridge.desktop.in > "$data/applications/ds5-bridge.desktop"
+sed "s|@PREFIX@|$prefix|" data/io.github.ds5bridge.App.desktop.in > "$data/applications/io.github.ds5bridge.App.desktop"
+chmod +x app/ds5-bridge-gtk.py
 
 # The old Electron app must not run next to the daemon (both would drive the bridge).
 rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/ds5-bridge.desktop"
