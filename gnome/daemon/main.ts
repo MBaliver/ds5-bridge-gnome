@@ -58,6 +58,30 @@ const service = new BridgeService(
   new BootloaderAuthorizationStore(userDataPath, new KeyringProtection())
 );
 
+// Upstream bug: bridge-service's normalizeAudioReactiveHapticsSource turns every
+// `output-device` source into 'system-audio' (settings-store and audio-helper support it).
+// Any config change (even Strength) would also wipe a saved one. Restore it afterwards.
+{
+  type Svc = {
+    setAudioReactiveHapticsConfig(c: Record<string, unknown>): Promise<BridgeSnapshot>;
+    snapshot: BridgeSnapshot;
+    updateSystemAudioHapticsEngine(): Promise<void>;
+    emitSnapshot(): void;
+  };
+  const svc = service as unknown as Svc;
+  const original = svc.setAudioReactiveHapticsConfig.bind(service);
+  const isDevice = (s: unknown) => typeof s === 'object' && s !== null && (s as { kind?: string }).kind === 'output-device';
+  svc.setAudioReactiveHapticsConfig = async (config) => {
+    const wanted = 'source' in config ? config.source : settingsStore.get().audioReactiveHapticsSource;
+    const result = await original(config);
+    if (!isDevice(wanted) || isDevice(settingsStore.get().audioReactiveHapticsSource)) return result;
+    svc.snapshot.settings = settingsStore.update({ audioReactiveHapticsSource: wanted } as never);
+    await svc.updateSystemAudioHapticsEngine();
+    svc.emitSnapshot();
+    return service.getSnapshot();
+  };
+}
+
 let firmwareActionsRunning = 0;
 
 // ------------------------------------------------- GNOME-layer settings
