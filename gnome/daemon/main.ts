@@ -20,6 +20,7 @@ import { SettingsStore } from '../../companion/src/main/settings-store';
 import type { BridgeSnapshot, PicoFirmwareAction, PicoFirmwareActionResult } from '../../companion/src/shared/types';
 import { CUSTOM_CHANNELS, GENERIC_METHODS, UPSTREAM_VERSION } from '../generated/upstream-ipc';
 import { BUS_NAME, DAEMON_CHANNELS, ERROR_NAME, INTERFACE, OBJECT_PATH, decode, encode } from '../shared/wire';
+import { HapticsMix, MIX_SINK_DESCRIPTION, MIX_SINK_NAME, type MixApp } from './haptics-mix';
 import { KeyringProtection } from './keyring-protection';
 
 const APP_NAME = 'DS5 Bridge';
@@ -58,6 +59,80 @@ const service = new BridgeService(
 );
 
 let firmwareActionsRunning = 0;
+
+// ------------------------------------------------- GNOME-layer settings
+
+const gnomeSettingsPath = path.join(userDataPath, 'gnome-daemon.json');
+type GnomeSettings = { hapticsMix: { enabled: boolean; excluded: MixApp[] } };
+// The apps the user named: voice chat, music and browsers. Games are everything else.
+const DEFAULT_EXCLUDED: MixApp[] = [
+  ['discord', 'Discord'], ['vesktop', 'Vesktop'], ['spotify', 'Spotify'], ['firefox', 'Firefox'],
+  ['chrome', 'Google Chrome'], ['chromium', 'Chromium'], ['brave', 'Brave'], ['zen', 'Zen Browser'],
+  ['librewolf', 'LibreWolf'], ['vivaldi-bin', 'Vivaldi'], ['msedge', 'Microsoft Edge']
+].map(([key, name]) => ({ key, name }));
+
+function readGnomeSettings(): GnomeSettings {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(gnomeSettingsPath, 'utf8')) as Partial<GnomeSettings>;
+    return { hapticsMix: { enabled: Boolean(parsed.hapticsMix?.enabled), excluded: parsed.hapticsMix?.excluded ?? DEFAULT_EXCLUDED } };
+  } catch {
+    return { hapticsMix: { enabled: false, excluded: DEFAULT_EXCLUDED } };
+  }
+}
+
+function writeGnomeSettings(next: GnomeSettings): void {
+  fs.mkdirSync(path.dirname(gnomeSettingsPath), { recursive: true });
+  fs.writeFileSync(`${gnomeSettingsPath}.tmp`, JSON.stringify(next, null, 2));
+  fs.renameSync(`${gnomeSettingsPath}.tmp`, gnomeSettingsPath);
+}
+
+let gnomeSettings = readGnomeSettings();
+const hapticsMix = new HapticsMix();
+const MIX_SOURCE = { kind: 'output-device' as const, deviceName: MIX_SINK_NAME, displayName: MIX_SINK_DESCRIPTION };
+
+function sourceIsMix(snapshot: BridgeSnapshot): boolean {
+  const source = snapshot.settings.audioReactiveHapticsSource as unknown;
+  return typeof source === 'object' && source !== null
+    && (source as { kind?: string; deviceName?: string }).kind === 'output-device'
+    && (source as { deviceName?: string }).deviceName === MIX_SINK_NAME;
+}
+
+let mixSwitching = false;
+
+async function setHapticsMix(enabled: boolean, excluded?: MixApp[]): Promise<unknown> {
+  mixSwitching = true;
+  try {
+    return await applyHapticsMix(enabled, excluded);
+  } finally {
+    mixSwitching = false;
+  }
+}
+
+async function applyHapticsMix(enabled: boolean, excluded?: MixApp[]): Promise<unknown> {
+  const clean = (excluded ?? gnomeSettings.hapticsMix.excluded)
+    .filter((app) => app && typeof app.key === 'string' && app.key.trim())
+    .map((app) => ({ key: app.key.trim().toLowerCase(), name: String(app.name || app.key) }));
+  gnomeSettings = { hapticsMix: { enabled, excluded: clean } };
+  writeGnomeSettings(gnomeSettings);
+  if (enabled) {
+    await hapticsMix.start(clean);
+    if (!sourceIsMix(service.getSnapshot())) {
+      await service.setAudioReactiveHapticsConfig({ source: MIX_SOURCE });
+    }
+  } else {
+    await hapticsMix.stop();
+    if (sourceIsMix(service.getSnapshot())) {
+      await service.setAudioReactiveHapticsConfig({ source: 'system-audio' });
+    }
+  }
+  return getHapticsMix();
+}
+
+async function getHapticsMix(): Promise<unknown> {
+  hapticsMix.setExcluded(gnomeSettings.hapticsMix.excluded);
+  const streams = hapticsMix.running ? hapticsMix.streams : await hapticsMix.listStreams().catch(() => []);
+  return { ...gnomeSettings.hapticsMix, running: hapticsMix.running, sinkName: MIX_SINK_NAME, streams };
+}
 
 function firmwareOptions(includeNuke = false) {
   return {
@@ -129,7 +204,9 @@ const OVERRIDES: Record<string, Handler> = {
     () => flashPicoFirmwareUf2(String(filePath), firmwareOptions())
   ),
   [DAEMON_CHANNELS.nukePicoFlashConfirmed]: () => runFirmwareAction('nuke', () => nukePicoFlash(firmwareOptions(true))),
-  [DAEMON_CHANNELS.firmwareActionRunning]: () => firmwareActionsRunning > 0
+  [DAEMON_CHANNELS.firmwareActionRunning]: () => firmwareActionsRunning > 0,
+  [DAEMON_CHANNELS.getHapticsMix]: () => getHapticsMix(),
+  [DAEMON_CHANNELS.setHapticsMix]: (enabled: boolean, excluded?: MixApp[]) => setHapticsMix(Boolean(enabled), excluded)
 };
 
 // Custom upstream channels a client must implement (UI-side). The daemon refuses them.
@@ -271,6 +348,7 @@ async function shutdown(reason: string): Promise<void> {
   stopping = true;
   console.log(`[ds5-bridged] stopping (${reason})`);
   try {
+    await hapticsMix.stop();
     await service.stop();
   } finally {
     bus.disconnect();
@@ -288,6 +366,10 @@ async function main(): Promise<void> {
 
   let lastSnapshotJson = '';
   service.on('snapshot', (snapshot: BridgeSnapshot) => {
+    // Another client picked a different source: the mix has nothing to feed any more.
+    if (!mixSwitching && gnomeSettings.hapticsMix.enabled && hapticsMix.running && !sourceIsMix(snapshot)) {
+      void setHapticsMix(false);
+    }
     iface.updateSummary(snapshot);
     const json = encode(snapshot);
     if (json === lastSnapshotJson) return;
@@ -303,6 +385,10 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   service.start();
+  if (gnomeSettings.hapticsMix.enabled) {
+    setHapticsMix(true).catch((error) => console.warn('[haptics-mix] start failed:', (error as Error).message));
+  }
+  process.on('exit', () => hapticsMix.stopSync());
   console.log(`[ds5-bridged] upstream ${UPSTREAM_VERSION} on ${BUS_NAME}; resources=${resourcesPath}; config=${userDataPath}`);
 }
 

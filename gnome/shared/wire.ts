@@ -17,7 +17,11 @@ export const DAEMON_CHANNELS = {
   /** () -> PicoFirmwareActionResult. The client asks for confirmation first. */
   nukePicoFlashConfirmed: 'daemon:nukePicoFlashConfirmed',
   /** () -> boolean. Whether a firmware action is running (window must not close the session). */
-  firmwareActionRunning: 'daemon:firmwareActionRunning'
+  firmwareActionRunning: 'daemon:firmwareActionRunning',
+  /** () -> {enabled, excluded: MixApp[], running, sinkName, streams: (MixApp & {included})[]} */
+  getHapticsMix: 'daemon:getHapticsMix',
+  /** (enabled: boolean, excluded?: MixApp[]) -> same as getHapticsMix. "All apps except…" haptics source. */
+  setHapticsMix: 'daemon:setHapticsMix'
 } as const;
 
 const UNDEFINED_MARK = '__ds5_undefined__';

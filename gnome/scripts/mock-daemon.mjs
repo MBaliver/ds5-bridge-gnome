@@ -31,7 +31,27 @@ class Mock extends Interface {
       const c = this.cal ?? { op: 1, target: 1 };
       return JSON.stringify({ received: true, bytes: [], target: c.target, code: c.op === 2 ? 2 : 1 });
     }
-    if (name === 'setNvsUnlocked' || name === 'holdInputForwarding') return 'null';
+    if (name === 'setNvsUnlocked' || name === 'holdInputForwarding' || name === 'selectTesterController') return 'null';
+    // AudioHapticsOutputDevice[] / AudioHapticsSession[] (shared/types.ts)
+    if (name === 'listAudioHapticsOutputDevices') return JSON.stringify([
+      { name: 'alsa_output.usb-GoXLR.Game', description: 'GoXLR Game', isDefault: false },
+      { name: 'ds5-haptics-mix', description: 'DS5 Haptics Mix', isDefault: false }]);
+    if (name === 'listAudioHapticsSessions') return JSON.stringify([
+      { processId: 4242, displayName: 'Elden Ring', executableName: 'eldenring.exe', processPath: null, iconPath: null,
+        sessionIdentifier: null, sessionInstanceIdentifier: null, state: 'active', endpointName: 'default', isSelected: false }]);
+    // GNOME-daemon channels (daemon/main.ts getHapticsMix)
+    if (channel === 'daemon:getHapticsMix' || channel === 'daemon:setHapticsMix') {
+      if (channel === 'daemon:setHapticsMix') {
+        this.mix = { enabled: args[0], excluded: args[1] ?? this.mix?.excluded ?? [{ key: 'discord', name: 'Discord' }, { key: 'spotify', name: 'Spotify' }, { key: 'firefox', name: 'Firefox' }] };
+        snapshot.settings.audioReactiveHapticsSource = args[0] ? { kind: 'output-device', deviceName: 'ds5-haptics-mix', displayName: 'DS5 Haptics Mix' } : 'system-audio';
+        snapshot.settings.audioReactiveHapticsEnabled = true;
+        this.Snapshot(JSON.stringify(snapshot));
+      }
+      const mix = this.mix ?? { enabled: false, excluded: [{ key: 'discord', name: 'Discord' }, { key: 'spotify', name: 'Spotify' }, { key: 'firefox', name: 'Firefox' }] };
+      return JSON.stringify({ ...mix, running: mix.enabled, sinkName: 'ds5-haptics-mix', streams: [
+        { key: 'eldenring.exe', name: 'Elden Ring', included: true }, { key: 'spotify', name: 'Spotify', included: false },
+        { key: 'discord', name: 'Discord', included: false }] });
+    }
     if (name === 'setRawTriggerEffect') return JSON.stringify(snapshot);
     if (name === 'readControllerInput') {
       // Both sticks circle the rim: clockwise for one lap, then counterclockwise. 3 s per lap.
@@ -39,7 +59,23 @@ class Mock extends Interface {
       const t = (Date.now() - this.t0) / 3000;
       const a = (t < 1.1 ? t : 2.2 - t) * 2 * Math.PI;
       const x = Math.round(128 + 127 * Math.cos(a)), y = Math.round(128 + 127 * Math.sin(a));
-      return JSON.stringify({ leftStickX: x, leftStickY: y, rightStickX: x, rightStickY: y, raw: [] });
+      // Same shape as BridgeService.readControllerInput (ControllerInputSnapshot).
+      const pressed = Math.floor(t * 4) % 6;
+      const state = {
+        leftStickX: x, leftStickY: y, rightStickX: 256 - x, rightStickY: y,
+        leftTrigger: Math.round(127 + 127 * Math.sin(a)), rightTrigger: Math.round(127 - 127 * Math.sin(a)),
+        dpadUp: pressed === 0, dpadDown: false, dpadLeft: false, dpadRight: pressed === 1,
+        square: pressed === 2, cross: pressed === 3, circle: false, triangle: pressed === 4, l1: pressed === 5, r1: false,
+        l2Pressed: false, r2Pressed: true, create: false, options: false, l3: false, r3: false, home: false,
+        touchpadButton: false, mute: false, edgeLeftFunction: false, edgeRightFunction: false,
+        edgeLeftPaddle: false, edgeRightPaddle: false,
+        gyroX: 12, gyroY: -3, gyroZ: 7, accelX: 120, accelY: 8150, accelZ: -300, sensorTimestamp: Date.now(),
+        touchPoints: [{ active: true, contactId: 1, x: 960 + 600 * Math.cos(a), y: 540 + 300 * Math.sin(a) },
+                      { active: false, contactId: 2, x: 0, y: 0 }],
+        batteryPercent: 82, rawPowerState: 0, charging: false, headsetPlugged: false,
+        microphonePlugged: false, microphoneMuted: false
+      };
+      return JSON.stringify({ controllerConnected: true, raw: [1, x, y, 256 - x, y, 0, 0, 8], state });
     }
     if (name === 'getVersion') return '"mock"';
     if (name === 'selectControllerProfile') snapshot.settings.selectedControllerProfileId = args[0];

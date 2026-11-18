@@ -114,6 +114,42 @@ CHORD_KEYS = ([(k, k) for k in ('Esc', 'Enter', 'Space', 'Tab', 'Backspace', 'De
 CHORD_MODIFIERS = [('Ctrl', 'Ctrl'), ('Shift', 'Shift'), ('Alt', 'Alt'), ('Super', 'Win')]
 
 
+MIX_SINK_NAME = 'ds5-haptics-mix'
+
+
+def audio_source_key(source):
+    if isinstance(source, dict) and source.get('kind') == 'output-device' and source.get('deviceName') == MIX_SINK_NAME:
+        return 'mix'
+    if isinstance(source, dict) and source.get('kind') == 'output-device':
+        return f'output-device:{source.get("deviceName")}'
+    if isinstance(source, dict) and source.get('kind') == 'app-session':
+        if source.get('processPath'):
+            return f'app-path:{source["processPath"].lower()}'
+        if source.get('executableName'):
+            return f'app-exe:{source["executableName"].lower()}'
+        return f'app-pid:{max(0, round(source.get("processId", 0)))}'
+    return source if source in ('controller-audio', 'system-audio') else 'system-audio'
+
+
+def audio_source_label(source):
+    if source == 'mix' or audio_source_key(source) == 'mix':
+        return 'All Apps Except…'
+    if isinstance(source, dict) and source.get('kind') == 'output-device':
+        return f'Output · {source.get("displayName") or source.get("deviceName")}'
+    if isinstance(source, dict) and source.get('kind') == 'app-session':
+        name = source.get('displayName') or (source.get('executableName') or '').rsplit('.', 1)[0] or 'Selected App'
+        return f'App · {name}'
+    return dict(REACTIVE_SOURCES).get(source, 'System Audio')
+
+
+def audio_source_from_session(session):
+    out = {'kind': 'app-session', 'processId': session['processId'], 'displayName': session['displayName']}
+    for key in ('executableName', 'processPath', 'sessionIdentifier', 'sessionInstanceIdentifier'):
+        if session.get(key):
+            out[key] = session[key]
+    return out
+
+
 def step_action(action):
     return action.endswith('-up') or action.endswith('-down')
 
@@ -146,9 +182,9 @@ class Glyphs:
     def __init__(self):
         self.cache = {}
 
-    def texture(self, name, size, rgba):
+    def texture(self, name, size, rgba, crop=False):
         color = '#{:02x}{:02x}{:02x}'.format(*(round(c * 255) for c in (rgba.red, rgba.green, rgba.blue)))
-        key = (name, size, color)
+        key = (name, size, color, crop)
         if key not in self.cache:
             path = os.path.join(GLYPH_DIR, f'{name}.svg')
             try:
@@ -157,6 +193,9 @@ class Glyphs:
             except OSError:
                 return None
             svg = svg.replace('#fff', color).replace('#FFF', color)
+            if crop:
+                # The glyphs carry ~15% padding; trim it so they match 16 px symbolic icons.
+                svg = svg.replace('viewBox="0 0 512 512"', 'viewBox="72 72 368 368"', 1)
             gi.require_version('GdkPixbuf', '2.0')
             from gi.repository import GdkPixbuf
             loader = GdkPixbuf.PixbufLoader()
@@ -335,12 +374,12 @@ class LocalState:
 GLYPHS = Glyphs()
 
 
-def glyph_picture(name, size=24):
+def glyph_picture(name, size=24, crop=False):
     """An upstream glyph by file name (e.g. 'R2', 'Left Stick'), recolored to the text color."""
     image = Gtk.Image(pixel_size=size, valign=Gtk.Align.CENTER)
 
     def paint(*_):
-        texture = GLYPHS.texture(name, size, image.get_color())
+        texture = GLYPHS.texture(name, size, image.get_color(), crop)
         if texture:
             image.set_from_paintable(texture)
     image.connect('realize', paint)
@@ -845,6 +884,273 @@ class TriggerEditor:
         return row
 
 
+TESTER_BUTTONS = [
+    ('triangle', 'Triangle', 'Triangle'), ('circle', 'Circle', 'Circle'), ('cross', 'Cross', 'Cross'),
+    ('square', 'Square', 'Square'), ('dpadUp', 'Up', 'D-Pad Up'), ('dpadRight', 'Right', 'D-Pad Right'),
+    ('dpadDown', 'Down', 'D-Pad Down'), ('dpadLeft', 'Left', 'D-Pad Left'), ('l1', 'L1', 'L1'), ('r1', 'R1', 'R1'),
+    ('l2Pressed', 'L2', 'L2'), ('r2Pressed', 'R2', 'R2'), ('l3', 'L3', 'Left Stick Click'),
+    ('r3', 'R3', 'Right Stick Click'), ('create', 'Create', 'Create'), ('options', 'Options', 'Options'),
+    ('home', 'PS', 'Home'), ('touchpadButton', 'Touchpad', 'Touch Pad Press'), ('mute', 'Mute', None),
+]
+TESTER_EDGE_BUTTONS = [('edgeLeftFunction', 'LFN'), ('edgeRightFunction', 'RFN'), ('edgeLeftPaddle', 'LB'),
+                       ('edgeRightPaddle', 'RB')]
+TESTER_POLL_MS = 40
+
+
+def _draw_stick(area, cr, width, height, data):
+    import math
+    fg = area.get_color()
+    accent = Adw.StyleManager.get_default().get_accent_color_rgba()
+    cx, cy, radius = width / 2, height / 2, min(width, height) / 2 - 6
+    cr.set_line_width(1.5)
+    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.3)
+    cr.arc(cx, cy, radius, 0, 2 * math.pi)
+    cr.stroke()
+    cr.move_to(cx - radius, cy)
+    cr.line_to(cx + radius, cy)
+    cr.move_to(cx, cy - radius)
+    cr.line_to(cx, cy + radius)
+    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.12)
+    cr.stroke()
+    deadzone = data.get('deadzone', 0) / 100
+    if deadzone:
+        cr.set_source_rgba(accent.red, accent.green, accent.blue, 0.18)
+        cr.arc(cx, cy, radius * deadzone, 0, 2 * math.pi)
+        cr.fill()
+    x, y = (data.get('x', 128) - 128) / 127, (data.get('y', 128) - 128) / 127
+    cr.set_source_rgba(accent.red, accent.green, accent.blue, 1 if data.get('pressed') else 0.9)
+    cr.arc(cx + x * radius, cy + y * radius, 9 if data.get('pressed') else 6, 0, 2 * math.pi)
+    cr.fill()
+
+
+def _draw_trigger(area, cr, width, height, data):
+    fg = area.get_color()
+    accent = Adw.StyleManager.get_default().get_accent_color_rgba()
+    value = data.get('value', 0) / 255
+    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.12)
+    cr.rectangle(0, 0, width, height)
+    cr.fill()
+    cr.set_source_rgba(accent.red, accent.green, accent.blue, 1)
+    cr.rectangle(0, height * (1 - value), width, height * value)
+    cr.fill()
+
+
+def _draw_touchpad(area, cr, width, height, data):
+    fg = area.get_color()
+    accent = Adw.StyleManager.get_default().get_accent_color_rgba()
+    import math
+    cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.08)
+    cr.rectangle(0, 0, width, height)
+    cr.fill()
+    for point in data.get('points', []):
+        if point.get('active'):
+            cr.set_source_rgba(accent.red, accent.green, accent.blue, 1)
+            cr.arc(point['x'] / 1920 * width, point['y'] / 1080 * height, 8, 0, 2 * math.pi)
+            cr.fill()
+
+
+class TesterWindow(Adw.Window):
+    """Live input tester (upstream TesterApp): a separate window, so it can stay in view while you play.
+    Polling and the input hold only run while it is open."""
+
+    def __init__(self, main):
+        super().__init__(title='Input Tester', default_width=760, default_height=860, transient_for=None)
+        self.main = main
+        self.daemon = main.daemon
+        self.busy = False
+        self.hold_id = 0
+        self.direct_paths = []
+        self.data = {k: {} for k in ('left', 'right', 'l2', 'r2', 'touch')}
+
+        page = Adw.PreferencesPage()
+        self.source = Adw.ComboRow(title='Read From')
+        self.source.connect('notify::selected', self._on_source)
+        self.pause = Adw.SwitchRow(title='Pause Input to This Computer', active=True,
+                                   subtitle='Buttons you press here do not reach games or the desktop')
+        self.pause.connect('notify::active', lambda *_: self._update_hold())
+        self.status = Adw.ActionRow(title='Status', css_classes=['property'], subtitle='Waiting for input…')
+        page.add(group(None, None, self.source, self.pause, self.status))
+
+        self.chips = {}
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=10, min_children_per_line=4,
+                           row_spacing=6, column_spacing=6, homogeneous=True, margin_top=6, margin_bottom=6)
+        for key, label, glyph in TESTER_BUTTONS:
+            flow.append(self._chip(key, label, glyph))
+        self.edge_chips = []
+        for key, label in TESTER_EDGE_BUTTONS:
+            chip = self._chip(key, label, None, text=label)
+            self.edge_chips.append(chip)
+            flow.append(chip)
+        page.add(group('Buttons', 'Lights up while pressed.', flow))
+
+        analog = Gtk.Box(spacing=18, halign=Gtk.Align.CENTER, margin_top=6, margin_bottom=6)
+        self.areas = {}
+        for key, title, draw, size in (('l2', 'L2', _draw_trigger, (22, 150)), ('left', 'Left Stick', _draw_stick, (150, 150)),
+                                       ('right', 'Right Stick', _draw_stick, (150, 150)), ('r2', 'R2', _draw_trigger, (22, 150))):
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            area = Gtk.DrawingArea(content_width=size[0], content_height=size[1], halign=Gtk.Align.CENTER)
+            area.set_draw_func(lambda a, cr, w, h, k=key, d=draw: d(a, cr, w, h, self.data[k]))
+            value = Gtk.Label(css_classes=['numeric', 'caption', 'dim-label'])
+            column.append(area)
+            column.append(Gtk.Label(label=title, css_classes=['caption-heading']))
+            column.append(value)
+            analog.append(column)
+            self.areas[key] = (area, value)
+        page.add(group('Sticks and Triggers', 'The shaded circle is the deadzone the bridge applies.', analog))
+
+        touch = Gtk.DrawingArea(content_width=384, content_height=216, halign=Gtk.Align.CENTER, margin_top=6,
+                                margin_bottom=6)
+        touch.set_draw_func(lambda a, cr, w, h: _draw_touchpad(a, cr, w, h, self.data['touch']))
+        self.areas['touch'] = (touch, None)
+        page.add(group('Touchpad', None, touch))
+
+        self.facts = {}
+        motion = group('Motion')
+        status = group('Controller')
+        for grp, items in ((motion, ('Gyroscope', 'Acceleration')),
+                           (status, ('Battery', 'Charging', 'Headset', 'Microphone'))):
+            for title in items:
+                row = Adw.ActionRow(title=title, css_classes=['property'], subtitle='—')
+                self.facts[title] = row
+                grp.add(row)
+        page.add(motion)
+        page.add(status)
+        self.raw = Gtk.Label(wrap=True, xalign=0, selectable=True, css_classes=['monospace', 'caption'],
+                             margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        raw_row = Adw.PreferencesRow(activatable=False, child=self.raw)
+        page.add(group('Raw Input Report', 'Exactly what the bridge forwarded; everything above is decoded from it.',
+                       raw_row))
+
+        view = Adw.ToolbarView(content=page)
+        view.add_top_bar(Adw.HeaderBar())
+        self.set_content(view)
+        self._fill_sources(main.snapshot)
+        self.poll_id = GLib.timeout_add(TESTER_POLL_MS, self._tick)
+        self.snap_id = main.daemon.connect('snapshot', lambda _d, s: self._fill_sources(s))
+        self.connect('close-request', self._on_close)
+        self._update_hold()
+
+    def _chip(self, key, label, glyph, text=None):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, css_classes=['ds5-chip'])
+        if glyph:
+            box.append(glyph_picture(glyph, 28))
+        elif key == 'mute':
+            box.append(Gtk.Image(icon_name='microphone-sensitivity-muted-symbolic', pixel_size=24))
+        else:
+            pill = Gtk.Label(label=text, css_classes=['caption-heading'], height_request=28)
+            box.append(pill)
+        box.append(Gtk.Label(label=label, css_classes=['caption']))
+        self.chips[key] = box
+        return box
+
+    def _fill_sources(self, snap):
+        census = (snap or {}).get('bridgeDevices') or {}
+        direct = [c for c in census.get('directControllers', []) if not c.get('hidUnavailable')]
+        paths = [None] + [c['path'] for c in direct]
+        labels = ['Bridge'] + [f'USB · {(c.get("product") or "DualSense").replace("Sony Interactive Entertainment ", "")}'
+                               + (' (charging via bridge)' if c.get('chargingViaBridge') else '') for c in direct]
+        selected = next((c['path'] for c in direct if c.get('selectedForTester')), None)
+        if paths != self.direct_paths:
+            self.direct_paths = paths
+            self._loading = True
+            self.source.set_model(Gtk.StringList.new(labels))
+            self._loading = False
+        self._loading = True
+        self.source.set_selected(paths.index(selected) if selected in paths else 0)
+        self._loading = False
+        self.source.set_visible(len(paths) > 1)
+        edge = self.main._is_edge(snap or {})
+        for chip in self.edge_chips:
+            chip.get_parent().set_visible(edge)
+        dz = (snap or {}).get('settings', {})
+        self.data['left']['deadzone'] = dz.get('stickDeadzoneLeftPercent', 0)
+        self.data['right']['deadzone'] = dz.get('stickDeadzoneRightPercent', 0)
+
+    def _direct(self):
+        index = self.source.get_selected()
+        return self.direct_paths[index] if 0 < index < len(self.direct_paths) else None
+
+    def _on_source(self, *_):
+        if getattr(self, '_loading', False):
+            return
+        self.daemon.call('bridge:selectTesterController', self._direct())
+        self._update_hold()
+
+    def _update_hold(self):
+        # A USB controller reaches the computer through the system driver, which cannot be paused.
+        direct = self._direct() is not None
+        self.pause.set_sensitive(not direct)
+        on = self.pause.get_active() and not direct
+        if self.hold_id:
+            GLib.source_remove(self.hold_id)
+            self.hold_id = 0
+        if on:
+            renew = lambda: (self.daemon.call('bridge:holdInputForwarding', INPUT_HOLD_MS, quiet=True), True)[1]  # noqa: E731
+            renew()
+            self.hold_id = GLib.timeout_add(INPUT_HOLD_RENEW_MS, renew)
+        else:
+            self.daemon.call('bridge:holdInputForwarding', 0, quiet=True)
+
+    def _tick(self):
+        if self.busy:
+            return GLib.SOURCE_CONTINUE
+        self.busy = True
+        started = GLib.get_monotonic_time()
+
+        def got(snapshot):
+            self.busy = False
+            self._show(snapshot, (GLib.get_monotonic_time() - started) / 1000)
+
+        def failed(message):
+            self.busy = False
+            self.status.set_subtitle(message)
+        self.daemon.call('bridge:readControllerInput', done=got, fail=failed)
+        return GLib.SOURCE_CONTINUE
+
+    def _show(self, snapshot, ms):
+        state = (snapshot or {}).get('state')
+        if not state:
+            self.status.set_subtitle('No controller is sending input' if self._direct() else
+                                     'No controller connected to the bridge')
+            return
+        self.status.set_subtitle(f'Live — {ms:.0f} ms per read, every {TESTER_POLL_MS} ms')
+        for key, chip in self.chips.items():
+            pressed = bool(state.get(key))
+            (chip.add_css_class if pressed else chip.remove_css_class)('pressed')
+        self.data['left'].update(x=state['leftStickX'], y=state['leftStickY'], pressed=state.get('l3'))
+        self.data['right'].update(x=state['rightStickX'], y=state['rightStickY'], pressed=state.get('r3'))
+        self.data['l2']['value'] = state['leftTrigger']
+        self.data['r2']['value'] = state['rightTrigger']
+        self.data['touch']['points'] = state.get('touchPoints', [])
+        labels = {'left': f'{state["leftStickX"]}, {state["leftStickY"]}',
+                  'right': f'{state["rightStickX"]}, {state["rightStickY"]}',
+                  'l2': str(state['leftTrigger']), 'r2': str(state['rightTrigger'])}
+        for key, (area, value) in self.areas.items():
+            area.queue_draw()
+            if value:
+                value.set_label(labels[key])
+        self.facts['Gyroscope'].set_subtitle(f'{state["gyroX"]}  {state["gyroY"]}  {state["gyroZ"]}')
+        self.facts['Acceleration'].set_subtitle(f'{state["accelX"]}  {state["accelY"]}  {state["accelZ"]}')
+        battery = state.get('batteryPercent')
+        self.facts['Battery'].set_subtitle('Unknown' if battery is None else f'{battery}%')
+        self.facts['Charging'].set_subtitle('Yes' if state.get('charging') else 'No')
+        self.facts['Headset'].set_subtitle('Plugged In' if state.get('headsetPlugged') else 'Not Connected')
+        mic = 'Plugged In' if state.get('microphonePlugged') else 'Built-In'
+        self.facts['Microphone'].set_subtitle(mic + (' · Muted' if state.get('microphoneMuted') else ''))
+        self.raw.set_label(' '.join(f'{b:02x}' for b in snapshot.get('raw', [])) or '—')
+
+    def _on_close(self, *_):
+        GLib.source_remove(self.poll_id)
+        if self.hold_id:
+            GLib.source_remove(self.hold_id)
+        self.daemon.call('bridge:holdInputForwarding', 0, quiet=True)
+        if self._direct():
+            self.daemon.call('bridge:selectTesterController', None, quiet=True)
+        self.daemon.disconnect(self.snap_id)
+        self.main.tester = None
+        return False
+
+
 # ----------------------------------------------------------------- window
 
 class Window(Adw.ApplicationWindow):
@@ -881,7 +1187,7 @@ class Window(Adw.ApplicationWindow):
             page = build()
             self.stack.add_named(page, key)
             box = Gtk.Box(spacing=12)
-            box.append(glyph_picture(icon[6:], 20) if icon.startswith('glyph:') else Gtk.Image(icon_name=icon))
+            box.append(glyph_picture(icon[6:], 16, crop=True) if icon.startswith('glyph:') else Gtk.Image(icon_name=icon))
             box.append(Gtk.Label(label=title, xalign=0))
             row = Gtk.ListBoxRow(child=box)
             row._key, row._title = key, title
@@ -889,6 +1195,7 @@ class Window(Adw.ApplicationWindow):
         sidebar.connect('row-activated', self._on_sidebar)
 
         menu = Gio.Menu()
+        menu.append('Input Tester', 'win.tester')
         menu.append('Classic Interface', 'app.classic')
         menu.append('Restore Defaults…', 'win.restore-defaults')
         menu.append('About DS5 Bridge', 'app.about')
@@ -912,6 +1219,10 @@ class Window(Adw.ApplicationWindow):
         breakpoint.add_setter(self.split, 'collapsed', True)
         self.add_breakpoint(breakpoint)
 
+        self.tester = None
+        tester = Gio.SimpleAction.new('tester', None)
+        tester.connect('activate', lambda *_: self.open_tester())
+        self.add_action(tester)
         restore = Gio.SimpleAction.new('restore-defaults', None)
         restore.connect('activate', lambda *_: self._restore_defaults())
         self.add_action(restore)
@@ -929,6 +1240,12 @@ class Window(Adw.ApplicationWindow):
 
     def setter(self, channel):
         return lambda value: self.call(channel, value)
+
+    def open_tester(self):
+        if not self.tester:
+            self.tester = TesterWindow(self)
+            self.tester.set_application(self.get_application())
+        self.tester.present()
 
     def toast(self, text):
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=4))
@@ -1186,7 +1503,69 @@ class Window(Adw.ApplicationWindow):
                 known_rows.append(row)
         b.syncers.append(known_sync)
 
+        bridges = Adw.PreferencesGroup(title='Bridges')
+        refresh = Gtk.Button(icon_name='view-refresh-symbolic', css_classes=['flat'], tooltip_text='Look for Bridges')
+        refresh.connect('clicked', lambda *_: self.call('bridge:refreshBridgeDevices'))
+        bridges.set_header_suffix(refresh)
+        bridge_rows = []
+        output_ids = []
+        output = Adw.ComboRow(title='Audio and Haptics Output',
+                              subtitle='Where sound and haptics go when a controller is also plugged in by USB')
+        output.connect('notify::selected', lambda r, _p: None if b.syncing or r.get_selected() >= len(output_ids)
+                       else self.call('bridge:setAudioTarget', output_ids[r.get_selected()]))
+        last_bridges = {'key': None}
+
+        def bridges_sync(s):
+            census = s.get('bridgeDevices') or {}
+            items = census.get('bridges', [])
+            direct = [c for c in census.get('directControllers', []) if not c.get('hidUnavailable')]
+            key = json.dumps([items, [(c['path'], c.get('product')) for c in direct], census.get('audioTargetPath')])
+            if key == last_bridges['key']:
+                return
+            last_bridges['key'] = key
+            for row in bridge_rows:
+                bridges.remove(row)
+            bridge_rows.clear()
+            if not items:
+                row = Adw.ActionRow(title='No bridge found', subtitle='Connect the Pico to this computer by USB')
+                bridges.add(row)
+                bridge_rows.append(row)
+            for item in items:
+                name = item.get('name') or 'Pico'
+                bits = ['Connected' if item.get('connected') else 'Not connected']
+                if item.get('selected'):
+                    bits.insert(0, 'In use')
+                if item.get('uniqueId'):
+                    bits.append(item['uniqueId'].upper())
+                row = Adw.ActionRow(title=GLib.markup_escape_text(name), subtitle=' · '.join(bits))
+                row.add_prefix(Gtk.Image(icon_name='drive-harddisk-usb-symbolic'))
+                if item.get('uniqueId'):
+                    rename = Gtk.Button(icon_name='document-edit-symbolic', valign=Gtk.Align.CENTER,
+                                        css_classes=['flat'], tooltip_text='Rename Bridge')
+                    rename.connect('clicked', lambda _b, it=item: self._ask_name(
+                        'Rename Bridge', it.get('name') or '', 'Rename',
+                        lambda n: self.call('bridge:setBridgeLabel', it['uniqueId'], n)))
+                    row.add_suffix(rename)
+                if not item.get('selected'):
+                    use = Gtk.Button(label='Use', valign=Gtk.Align.CENTER)
+                    use.connect('clicked', lambda _b, it=item: self.call('bridge:selectBridge', it['path']))
+                    row.add_suffix(use)
+                bridges.add(row)
+                bridge_rows.append(row)
+            output_ids[:] = [None] + [c['path'] for c in direct]
+            output.set_model(Gtk.StringList.new(['Bridge'] + [
+                f'USB · {(c.get("product") or "DualSense").replace("Sony Interactive Entertainment ", "")}'
+                for c in direct]))
+            target = census.get('audioTargetPath')
+            output.set_selected(output_ids.index(target) if target in output_ids else 0)
+            output.set_visible(bool(direct))
+            bridges.remove(output)
+            bridges.add(output)
+        bridges.add(output)
+        b.syncers.append(bridges_sync)
+
         return self._page(
+            bridges,
             group('Pairing', 'Hold the PS and Create buttons until the light bar flashes, then pair.',
                   button_row('Pair New Controller', 'Pair', lambda: self.call('bridge:requestControllerPairing'),
                              style='suggested-action'),
@@ -1240,7 +1619,7 @@ class Window(Adw.ApplicationWindow):
         b.syncers.append(lambda s: None if b._held(expander) else expander.set_enable_expansion(
             bool(dig(s, 'settings.audioReactiveHapticsEnabled'))))
         for row in (
-            b.combo('Source', REACTIVE_SOURCES, lambda s: dig(s, 'settings.audioReactiveHapticsSource'), reactive('source')),
+            *self._audio_source_row(expander),
             b.combo('Mode', REACTIVE_MODES, lambda s: dig(s, 'settings.audioReactiveHapticsMode'), reactive('mode')),
             b.scale('Strength', 0, 200, 10, lambda s: dig(s, 'settings.audioReactiveHapticsGainPercent'),
                     reactive('gainPercent')),
@@ -1291,6 +1670,126 @@ class Window(Adw.ApplicationWindow):
         step()
 
     # ---- triggers
+
+    def _audio_source_row(self, expander):
+        """Source picker: controller/system audio, a specific output (PipeWire sink) or one app."""
+        b = self.b
+        row = Adw.ComboRow(title='Source', enable_search=True, model=Gtk.StringList())
+        state = {'options': [], 'devices': [], 'sessions': [], 'key': None}
+        refresh = Gtk.Button(icon_name='view-refresh-symbolic', valign=Gtk.Align.CENTER, css_classes=['flat'],
+                             tooltip_text='Refresh Apps and Outputs')
+        row.add_suffix(refresh)
+
+        def rebuild():
+            current = dig(self.snapshot, 'settings.audioReactiveHapticsSource', 'system-audio')
+            options = [('controller-audio', 'controller-audio'), ('system-audio', 'system-audio'), ('mix', None)]
+            options += [({'kind': 'output-device', 'deviceName': d['name'], 'displayName': d['description']}, None)
+                        for d in state['devices'] if d['name'] != MIX_SINK_NAME]
+            options += [(audio_source_from_session(x), None) for x in state['sessions']]
+            keys = [audio_source_key(o) for o, _ in options]
+            excluded_row.set_visible(audio_source_key(current) == 'mix')
+            if audio_source_key(current) not in keys:
+                options.append((current, None))  # keep the saved choice visible even if it is not running
+                keys.append(audio_source_key(current))
+            labels = [audio_source_label(o) for o, _ in options]
+            signature = json.dumps([keys, labels, audio_source_key(current)])
+            if signature == state['key']:
+                return
+            state['key'] = signature
+            state['options'] = [o for o, _ in options]
+            # Restore rather than clear: this also runs inside Binder.sync, and clearing the flag
+            # there let every later syncer echo its value back to the daemon.
+            was_syncing, b.syncing = b.syncing, True
+            try:
+                row.set_model(Gtk.StringList.new(labels))
+                row.set_selected(keys.index(audio_source_key(current)))
+            finally:
+                b.syncing = was_syncing
+
+        def fetch(*_):
+            def devices(value):
+                state['devices'] = value or []
+                rebuild()
+
+            def sessions(value):
+                # Several streams of one app collapse into one choice.
+                seen, unique = set(), []
+                for x in value or []:
+                    key = audio_source_key(audio_source_from_session(x))
+                    if key not in seen:
+                        seen.add(key)
+                        unique.append(x)
+                state['sessions'] = unique
+                rebuild()
+            self.call('bridge:listAudioHapticsOutputDevices', done=devices, quiet=True)
+            self.call('bridge:listAudioHapticsSessions', done=sessions, quiet=True)
+
+        def chosen(*_):
+            index = row.get_selected()
+            if b.syncing or index >= len(state['options']):
+                return
+            option = state['options'][index]
+            if option == 'mix':
+                self.call('daemon:setHapticsMix', True, done=lambda m: update_summary(m))
+            else:
+                self.call('bridge:setAudioReactiveHapticsConfig', {'source': option})
+        row.connect('notify::selected', chosen)
+        refresh.connect('clicked', fetch)
+        expander.connect('notify::expanded', lambda e, _p: e.get_expanded() and fetch())
+        def update_summary(mix):
+            names = [a['name'] for a in (mix or {}).get('excluded', [])]
+            excluded_row.set_subtitle('Nothing excluded' if not names else
+                                      'Excluding ' + ', '.join(names[:4]) + (f' and {len(names) - 4} more'
+                                                                             if len(names) > 4 else ''))
+        excluded_row = Adw.ActionRow(title='Excluded Apps', activatable=True)
+        excluded_row.add_suffix(Gtk.Image(icon_name='go-next-symbolic'))
+        excluded_row.connect('activated', lambda *_: self._edit_exclusions(update_summary))
+        excluded_row.set_visible(False)
+        self.call('daemon:getHapticsMix', done=update_summary, quiet=True)
+        b.syncers.append(lambda s: rebuild())
+        return row, excluded_row
+
+    def _edit_exclusions(self, on_saved):
+        """Pick the apps whose sound must NOT drive haptics; every other app (games) feeds them."""
+        def show(mix):
+            excluded = {a['key']: a for a in mix.get('excluded', [])}
+            apps = {s['key']: {'key': s['key'], 'name': s['name'], 'playing': True} for s in mix.get('streams', [])}
+            for key, app in excluded.items():
+                apps.setdefault(key, {'key': key, 'name': app['name'], 'playing': False})
+            page = Adw.PreferencesPage()
+            listing = Adw.PreferencesGroup(
+                title='Don’t Use for Haptics',
+                description='Checked apps never reach the controller. Every other app, like the game you are '
+                            'playing, drives the haptics automatically.')
+            checks = {}
+
+            def add_row(app, checked):
+                row = Adw.ActionRow(title=GLib.markup_escape_text(app['name']),
+                                    subtitle='Playing now' if app.get('playing') else 'Not playing')
+                check = Gtk.CheckButton(active=checked, valign=Gtk.Align.CENTER)
+                row.add_prefix(check)
+                row.set_activatable_widget(check)
+                listing.add(row)
+                checks[app['key']] = (check, app)
+            for app in sorted(apps.values(), key=lambda a: (not a['playing'], a['name'].lower())):
+                add_row(app, app['key'] in excluded)
+            page.add(listing)
+            entry = Adw.EntryRow(title='Add an App by Name', show_apply_button=True)
+
+            def add_typed(*_):
+                name = entry.get_text().strip()
+                key = name.lower()
+                if key and key not in checks:
+                    add_row({'key': key, 'name': name, 'playing': False}, True)
+                entry.set_text('')
+            entry.connect('apply', add_typed)
+            page.add(group(None, 'Use the program name, like “discord” or “firefox”.', entry))
+
+            def save():
+                chosen = [{'key': key, 'name': app['name']} for key, (check, app) in checks.items() if check.get_active()]
+                self.call('daemon:setHapticsMix', True, chosen, done=on_saved)
+            self._dialog('Excluded Apps', page, save)
+        self.call('daemon:getHapticsMix', done=show)
 
     def _page_triggers(self):
         b = self.b
@@ -1392,8 +1891,8 @@ class Window(Adw.ApplicationWindow):
                   'Writes the calibration into the controller’s permanent storage. A reset will not undo it, and an '
                   'interrupted write can leave the controller unusable. Run the temporary calibration first.',
                   perm_centre, perm_range),
-            group(None, 'The live input tester is in the classic interface.',
-                  button_row('Input Tester', 'Open', lambda: self.get_application().activate_action('classic'))),
+            group(None, None, button_row('Input Tester', 'Open', self.open_tester,
+                                         subtitle='Watch every button, stick, trigger and sensor live')),
         )
 
     def _set_cal_busy(self, busy):
@@ -1515,8 +2014,10 @@ class Window(Adw.ApplicationWindow):
             if not poll['busy']:
                 poll['busy'] = True
 
-                def got(state):
+                def got(snapshot):
                     poll['busy'] = False
+                    # ControllerInputSnapshot: {controllerConnected, raw, state: DualSenseInputState | null}
+                    state = (snapshot or {}).get('state')
                     if not state:
                         return
                     now = GLib.get_monotonic_time() / 1000
@@ -2093,8 +2594,18 @@ class Window(Adw.ApplicationWindow):
                              subtitle='Flash a DS5 Bridge UF2 onto the Pico'),
                   button_row('Bootloader Mode', 'Enter', lambda: self.call(
                       'bridge:mountPicoBootloader', done=lambda r: self.toast(r.get('message', '')) if r else None),
-                      subtitle='Mount the Pico as a USB drive')),
+                      subtitle='Mount the Pico as a USB drive'),
+                  button_row('Erase Pico Flash', 'Erase…', self._nuke, style='destructive-action',
+                             subtitle='Recovery only: wipes the Pico so a bad firmware can be replaced')),
         )
+
+    def _nuke(self):
+        self._confirm('Erase Pico Flash?',
+                      'This copies the bundled Pico Universal Flash Nuke UF2 to the mounted Pico bootloader drive '
+                      'and erases the Pico flash.\n\nThe bridge will not work again until you flash the DS5 Bridge '
+                      'firmware back onto it. Use this only to recover from a bad or stuck firmware install.',
+                      'Erase', lambda: self.call('daemon:nukePicoFlashConfirmed',
+                                                 done=lambda r: self.toast(r.get('message', '')) if r else None))
 
     def _flash_firmware(self):
         dialog = Gtk.FileDialog(title='Choose Pico Firmware')
@@ -2132,6 +2643,8 @@ class App(Adw.Application):
         css.load_from_string('''
             .ds5-pill { border-radius: 6px; padding: 3px 4px; background: alpha(currentColor, 0.1); }
             row.ds5-remapped .subtitle { color: var(--accent-color); opacity: 1; }
+            .ds5-chip { padding: 8px 4px; border-radius: 12px; opacity: 0.4; }
+            .ds5-chip.pressed { opacity: 1; background: alpha(var(--accent-bg-color), 0.3); }
         ''')
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -2150,13 +2663,24 @@ class App(Adw.Application):
     def _dev_snapshots(self, window, prefix):
         keys = [key for key, *_ in window.pages]
 
-        def render_now(name):
-            paintable = Gtk.WidgetPaintable(widget=window)
+        def render_now(name, target=None):
+            target = target or window
+            paintable = Gtk.WidgetPaintable(widget=target)
             snapshot = Gtk.Snapshot()
-            paintable.snapshot(snapshot, window.get_width(), window.get_height())
+            paintable.snapshot(snapshot, target.get_width(), target.get_height())
             node = snapshot.to_node()
             if node:
-                window.get_renderer().render_texture(node, None).save_to_png(f'{prefix}-{name}.png')
+                target.get_renderer().render_texture(node, None).save_to_png(f'{prefix}-{name}.png')
+
+        def iter_widgets(widget):
+            stack = [widget]
+            while stack:
+                w = stack.pop()
+                yield w
+                child = w.get_first_child()
+                while child is not None:
+                    stack.append(child)
+                    child = child.get_next_sibling()
 
         def scroll_bottom(widget):
             child = widget
@@ -2190,6 +2714,21 @@ class App(Adw.Application):
                 lambda: window._sweep_finish.emit('clicked') if window._sweep_finish.get_sensitive() else None,
                 lambda: None, lambda: None,
                 lambda: render_now('d5-range-done'),
+                lambda: window.daemon.call('daemon:setHapticsMix', True),
+                lambda: window.stack.set_visible_child_name('haptics'),
+                lambda: [e.set_expanded(True) for e in iter_widgets(window.stack.get_child_by_name('haptics'))
+                         if isinstance(e, Adw.ExpanderRow)],
+                lambda: scroll_bottom(window.stack.get_child_by_name('haptics')),
+                lambda: render_now('d6-haptics-mix'),
+                lambda: window._edit_exclusions(lambda m: None),
+                lambda: None,
+                lambda: render_now('d7-exclusions'),
+                lambda: window._last_dialog_save.emit('clicked'),
+                lambda: window.stack.set_visible_child_name('devices'),
+                lambda: render_now('d8-devices'),
+                lambda: window.open_tester(),
+                lambda: None, lambda: None,
+                lambda: render_now('d9-tester', window.tester),
                 lambda: self.quit(),
             ]
             for i, step in enumerate(steps):
