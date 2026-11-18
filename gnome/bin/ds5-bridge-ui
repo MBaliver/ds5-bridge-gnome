@@ -1,0 +1,5 @@
+#!/bin/sh
+# Opens the DS5 Bridge UI (legacy Electron renderer) as a client of ds5-bridged.
+here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ATTACH_CONSOLE
+exec "$here/../companion/node_modules/.bin/electron" "$here/dist/gnome/client/main.js" "$@"

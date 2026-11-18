@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.ds5bridge.Daemon
+Exec=/bin/false
+SystemdService=ds5-bridged.service

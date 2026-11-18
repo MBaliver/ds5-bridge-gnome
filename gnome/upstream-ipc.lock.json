@@ -1,0 +1,77 @@
+{
+  "rendererEvents": [
+    "bridge:snapshot",
+    "window:maximizedChanged"
+  ],
+  "serviceEvents": [
+    "snapshot",
+    "toast"
+  ],
+  "serviceConstructor": "private readonly settingsStore: SettingsStore, private readonly bootloaderAuthorizationStore?: BootloaderAuthorizationStorePort",
+  "custom": {
+    "bridge:getStatus": {
+      "owner": "daemon",
+      "hash": "d05f5b36975465ca"
+    },
+    "app:getVersion": {
+      "owner": "daemon",
+      "hash": "68d32b771453faad"
+    },
+    "bridge:listAudioHapticsSessions": {
+      "owner": "daemon+client",
+      "hash": "ccf426ec8c1d912e"
+    },
+    "bridge:setUiScalePercent": {
+      "owner": "daemon+client",
+      "hash": "a0d96b7e67b5a0c7"
+    },
+    "bridge:setLaunchAtStartupEnabled": {
+      "owner": "daemon",
+      "hash": "988e1443decc7902"
+    },
+    "bridge:mountPicoBootloader": {
+      "owner": "daemon",
+      "hash": "5ed8ef2a50ba12a7"
+    },
+    "bridge:flashPicoFirmware": {
+      "owner": "client",
+      "hash": "72a04c02a1d685a1"
+    },
+    "bridge:nukePicoFlash": {
+      "owner": "client",
+      "hash": "77657063e5e8ac9b"
+    },
+    "bridge:openTesterWindow": {
+      "owner": "client",
+      "hash": "56eeebd1cce31b99"
+    },
+    "bridge:restoreDefaults": {
+      "owner": "daemon+client",
+      "hash": "7f0232e0d40052eb"
+    },
+    "bridge:getDiagnostics": {
+      "owner": "daemon",
+      "hash": "cf5159e17eb3e506"
+    },
+    "window:minimize": {
+      "owner": "client",
+      "hash": "c559e54e6892f887"
+    },
+    "window:toggleMaximize": {
+      "owner": "client",
+      "hash": "6aa1164d0e0535d5"
+    },
+    "window:isMaximized": {
+      "owner": "client",
+      "hash": "d141f703deae10b7"
+    },
+    "window:hide": {
+      "owner": "client",
+      "hash": "aaf62d14a7c6d192"
+    },
+    "window:openExternal": {
+      "owner": "client",
+      "hash": "a42602c11f556ae9"
+    }
+  }
+}

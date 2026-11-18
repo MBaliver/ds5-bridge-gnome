@@ -1,0 +1,15 @@
+[Unit]
+Description=DS5 Bridge service (headless companion backend)
+Documentation=https://github.com/djanice1980/DS5_Bridge
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service wireplumber.service
+
+[Service]
+Type=dbus
+BusName=io.github.ds5bridge.Daemon
+ExecStart=@NODE@ @PREFIX@/gnome/dist/gnome/daemon/main.js
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,23 @@
+{
+  "name": "ds5-bridge-gnome",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GNOME frontend layer for DS5 Bridge: headless daemon over D-Bus + clients. Upstream companion code is reused unmodified.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "gen": "node scripts/gen-channels.mjs",
+    "build": "npm run gen && tsc -p tsconfig.daemon.json && tsc -p tsconfig.client.json",
+    "build:daemon": "npm run gen && tsc -p tsconfig.daemon.json",
+    "check-upstream": "node scripts/check-upstream.mjs",
+    "daemon": "node dist/gnome/daemon/main.js",
+    "client": "../companion/node_modules/.bin/electron dist/gnome/client/main.js"
+  },
+  "dependencies": {
+    "dbus-next": "0.10.2",
+    "node-hid": "3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "5.9.3"
+  }
+}

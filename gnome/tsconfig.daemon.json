@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "daemon",
+    "shared",
+    "generated",
+    "../companion/src/main/hid-discovery-worker.ts"
+  ]
+}

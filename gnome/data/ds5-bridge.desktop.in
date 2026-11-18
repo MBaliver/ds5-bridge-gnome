@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=DS5 Bridge
+Comment=Configure the Pico DS5 Bridge and your DualSense
+Exec=@PREFIX@/gnome/bin/ds5-bridge-ui
+Terminal=false
+Type=Application
+Icon=ds5-bridge
+StartupWMClass=ds5-bridge
+Categories=Game;Settings;HardwareSettings;
+Keywords=DualSense;PlayStation;controller;gamepad;haptics;
