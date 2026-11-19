@@ -22,6 +22,7 @@ import { CUSTOM_CHANNELS, GENERIC_METHODS, UPSTREAM_VERSION } from '../generated
 import { BUS_NAME, DAEMON_CHANNELS, ERROR_NAME, INTERFACE, OBJECT_PATH, decode, encode } from '../shared/wire';
 import { HapticsMix, MIX_SINK_DESCRIPTION, MIX_SINK_NAME, type MixApp } from './haptics-mix';
 import { KeyringProtection } from './keyring-protection';
+import { startOrphanReaper } from './orphan-reaper';
 
 const APP_NAME = 'DS5 Bridge';
 const SYSTEMD_UNIT = 'ds5-bridged.service';
@@ -417,6 +418,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   service.start();
+  startOrphanReaper();
   if (gnomeSettings.hapticsMix.enabled) {
     setHapticsMix(true).catch((error) => console.warn('[haptics-mix] start failed:', (error as Error).message));
   }

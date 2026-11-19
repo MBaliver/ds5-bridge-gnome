@@ -11,7 +11,11 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+// A wedged PipeWire must never pin a reconcile (or the D-Bus call behind it) forever.
+const COMMAND_TIMEOUT_MS = 5000;
+const run = (file: string, args: string[], options: { maxBuffer?: number } = {}) =>
+  execFileAsync(file, args, { ...options, timeout: COMMAND_TIMEOUT_MS, killSignal: 'SIGKILL' });
 
 export const MIX_SINK_NAME = 'ds5-haptics-mix';
 export const MIX_SINK_DESCRIPTION = 'DS5 Haptics Mix';
@@ -98,7 +102,7 @@ export class HapticsMix {
   /** Synchronous best effort for process exit. */
   stopSync(): void {
     if (this.moduleId) {
-      try { execFileSync('pactl', ['unload-module', this.moduleId]); } catch { /* gone already */ }
+      try { execFileSync('pactl', ['unload-module', this.moduleId], { timeout: COMMAND_TIMEOUT_MS }); } catch { /* gone already */ }
       this.moduleId = null;
     }
   }

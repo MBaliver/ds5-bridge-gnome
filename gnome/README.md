@@ -62,6 +62,7 @@ Undo: `systemctl --user disable --now ds5-bridged`, then remove `~/.config/syste
 ## GNOME-layer features (not in upstream)
 
 - **Haptics from all apps except…** (`daemon/haptics-mix.ts`): audio-reactive haptics fed by every app except the ones you exclude (voice chat, music, browsers), so whatever game is running drives them automatically. It creates a null sink "DS5 Haptics Mix" and fans a copy of each non-excluded app stream into it with `pw-link`. Apps keep playing to their normal output. The link set is reconciled from `pw-dump` every 1.5 s, and the haptics source points at the sink, which upstream already captures as an output device. Settings live in `~/.config/DS5 Bridge/gnome-daemon.json`. Daemon channels: `daemon:getHapticsMix`, `daemon:setHapticsMix(enabled, excluded)`.
+- **Orphaned audio streams reaper** (`daemon/orphan-reaper.ts`): if upstream's AudioHelper dies without its own shutdown path (SIGKILL, crash, or the controller powering off so the bridge re-enumerates as 0x0ce7), its `pw-play`/`pw-record` haptics pair is orphaned and keeps a stream on the controller's vanished ALSA sink. PipeWire then retries that dead device until it runs out of file descriptors and no app can play audio. Every 5 s the daemon stops any `pw-play`/`pw-record`/`pw-cat` in its own unit cgroup whose parent is no longer in that cgroup. The haptics-mix PipeWire commands also time out after 5 s.
 
 ## Differences from upstream behaviour
 
