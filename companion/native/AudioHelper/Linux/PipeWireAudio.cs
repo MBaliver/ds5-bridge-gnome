@@ -225,21 +225,25 @@ static class PipeWireAudio
 
         using var process = Process.Start(startInfo)
             ?? throw new IOException($"{tool} could not be started.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = stderrTask.GetAwaiter().GetResult();
         if (!process.WaitForExit(timeoutMs))
         {
             try
             {
                 process.Kill(entireProcessTree: true);
+                process.WaitForExit(500);
             }
             catch
             {
                 // Best effort.
             }
+            _ = stdoutTask.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            _ = stderrTask.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
             throw new IOException($"{tool} timed out after {timeoutMs} ms.");
         }
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0)
         {
             var detail = stderr.Trim();

@@ -20,7 +20,7 @@ static class LinuxHapticsMirror
     private const int OutputChannels = 4;
     private const int BytesPerSample = 2;
     private const int ChunkFrames = 480; // 10 ms at 48 kHz
-    private const int RouteWatchIntervalMs = 1000;
+    private const int RouteWatchIntervalMs = 5000;
 
     public static int Run(LinuxHelperOptions options)
     {
@@ -515,6 +515,7 @@ static class LinuxHapticsMirror
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
+                process.WaitForExit(500);
             }
         }
         catch

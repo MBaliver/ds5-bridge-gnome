@@ -87,6 +87,29 @@ const DEV_HELPER_RELATIVE_PATH = path.join(
 // lingering pw-cat streams of issue #3. The helper also handles SIGTERM
 // gracefully now, so the escalation itself no longer orphans anything; the
 // ordering keeps SIGKILL as the only dangerous step and makes it last.
+const DETACH_HELPER_GROUP = process.platform !== 'win32';
+
+function killHelperTree(helper: ChildProcess, signal?: NodeJS.Signals): void {
+  const effectiveSignal = signal ?? 'SIGTERM';
+  if (DETACH_HELPER_GROUP && helper.pid) {
+    try {
+      process.kill(-helper.pid, effectiveSignal);
+      return;
+    } catch {
+      // Fall back to direct kill if the group is already gone.
+    }
+  }
+  try {
+    if (signal) {
+      helper.kill(signal);
+    } else {
+      helper.kill();
+    }
+  } catch {
+    // Already gone.
+  }
+}
+
 function stopHelperGracefully(helper: ChildProcess, stopLine?: string): Promise<void> {
   if (helper.exitCode != null || helper.signalCode != null) {
     return Promise.resolve();
@@ -94,12 +117,12 @@ function stopHelperGracefully(helper: ChildProcess, stopLine?: string): Promise<
   return new Promise<void>((resolve) => {
     const sigtermTimer = setTimeout(() => {
       if (!helper.killed) {
-        helper.kill();
+        killHelperTree(helper);
       }
     }, HELPER_STOP_EXIT_GRACE_MS);
     const sigkillTimer = setTimeout(() => {
       if (helper.exitCode == null && helper.signalCode == null) {
-        helper.kill('SIGKILL');
+        killHelperTree(helper, 'SIGKILL');
       }
       resolve();
     }, HELPER_STOP_EXIT_GRACE_MS + HELPER_STOP_SIGKILL_GRACE_MS);
@@ -331,6 +354,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
 
     const helper = spawn(helperPath, args, {
       env: buildSystemAudioHapticsHelperEnv(),
+      detached: DETACH_HELPER_GROUP,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -491,6 +515,7 @@ export class LinuxUsbHapticsEngine extends EventEmitter {
 
     const helper = spawn(helperPath, args, {
       env: buildSystemAudioHapticsHelperEnv(),
+      detached: DETACH_HELPER_GROUP,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -638,6 +663,7 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
     const helperPath = resolveHelperPath();
     const helper = spawn(helperPath, ['--monitor-audio-sessions'], {
       env: buildSystemAudioHapticsHelperEnv(),
+      detached: DETACH_HELPER_GROUP,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -679,7 +705,12 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
             this.process = null;
           }
           if (!helper.killed) {
-            helper.kill();
+            killHelperTree(helper, 'SIGTERM');
+            setTimeout(() => {
+              if (helper.exitCode == null && helper.signalCode == null) {
+                killHelperTree(helper, 'SIGKILL');
+              }
+            }, 500).unref();
           }
           reject(error);
         } else {
@@ -1029,6 +1060,7 @@ function orderByPreferredAudioHelperCommand(commands: AudioHelperCommand[]): Aud
 
 function runAudioHelperCommandOnce(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const helper = spawn(command, args, {
+    detached: DETACH_HELPER_GROUP,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -1045,7 +1077,12 @@ function runAudioHelperCommandOnce(command: string, args: string[]): Promise<{ s
       clearTimeout(timeout);
       if (error) {
         if (!helper.killed) {
-          helper.kill();
+          killHelperTree(helper, 'SIGTERM');
+          setTimeout(() => {
+            if (helper.exitCode == null && helper.signalCode == null) {
+              killHelperTree(helper, 'SIGKILL');
+            }
+          }, 500).unref();
         }
         reject(error);
       } else {
@@ -1110,7 +1147,12 @@ async function waitForHelperRecordingStarted(
       clearTimeout(timeout);
       if (error) {
         if (!helper.killed) {
-          helper.kill();
+          killHelperTree(helper, 'SIGTERM');
+          setTimeout(() => {
+            if (helper.exitCode == null && helper.signalCode == null) {
+              killHelperTree(helper, 'SIGKILL');
+            }
+          }, 500).unref();
         }
         reject(error);
       } else {
@@ -1171,6 +1213,7 @@ export async function playBridgeSpeakerTestTone(
     '--speaker-volume',
     `${normalizeSpeakerVolumePercent(speakerVolumePercent)}`
   ], {
+    detached: DETACH_HELPER_GROUP,
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe']
   });
@@ -1192,7 +1235,7 @@ export async function playBridgeSpeakerTestTone(
     };
     const timeout = setTimeout(() => {
       if (!helper.killed) {
-        helper.kill('SIGKILL');
+        killHelperTree(helper, 'SIGKILL');
       }
       finish(new Error('Speaker test helper timed out.'));
     }, HELPER_TEST_TONE_TIMEOUT_MS);
@@ -1227,6 +1270,7 @@ export async function playBridgeHapticsTestPattern(
     '--haptics-gain',
     `${normalizeTestHapticsGainPercent(hapticsGainPercent)}`
   ], {
+    detached: DETACH_HELPER_GROUP,
     windowsHide: true,
     stdio: ['ignore', 'ignore', 'pipe']
   });
@@ -1248,7 +1292,7 @@ export async function playBridgeHapticsTestPattern(
     };
     const timeout = setTimeout(() => {
       if (!helper.killed) {
-        helper.kill('SIGKILL');
+        killHelperTree(helper, 'SIGKILL');
       }
       finish(new Error('Haptics test helper timed out.'));
     }, HELPER_TEST_TONE_TIMEOUT_MS);
@@ -1327,6 +1371,7 @@ export class MicKeepaliveEngine extends EventEmitter {
   private async startInternal(): Promise<void> {
     const helperPath = resolveHelperPath();
     const helper = spawn(helperPath, ['--mic-keepalive-only', '--mic-device-name', 'DS5 Bridge'], {
+      detached: DETACH_HELPER_GROUP,
       windowsHide: true,
       stdio: ['pipe', 'ignore', 'pipe']
     });
@@ -1384,6 +1429,7 @@ export class TouchpadInhibitEngine extends EventEmitter {
   private async startInternal(): Promise<void> {
     const helperPath = resolveHelperPath();
     const helper = spawn(helperPath, ['--inhibit-touchpad'], {
+      detached: DETACH_HELPER_GROUP,
       windowsHide: true,
       stdio: ['pipe', 'ignore', 'pipe']
     });
@@ -1485,6 +1531,7 @@ export class VirtualKeyboardEngine extends EventEmitter {
     return new Promise<void>((resolve, reject) => {
       const helperPath = resolveHelperPath();
       const helper = spawn(helperPath, ['--uinput-keyboard'], {
+        detached: DETACH_HELPER_GROUP,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe']
       }) as ChildProcessWithoutNullStreams;
@@ -1493,7 +1540,7 @@ export class VirtualKeyboardEngine extends EventEmitter {
       const timeout = setTimeout(() => {
         if (!settled) {
           settled = true;
-          helper.kill();
+          killHelperTree(helper, 'SIGTERM');
           reject(new Error('Timed out starting the virtual keyboard helper.'));
         }
       }, UINPUT_START_TIMEOUT_MS);
@@ -1513,7 +1560,7 @@ export class VirtualKeyboardEngine extends EventEmitter {
           } else if (!settled && trimmed.startsWith(UINPUT_UNAVAILABLE_PREFIX)) {
             settled = true;
             clearTimeout(timeout);
-            helper.kill();
+            killHelperTree(helper, 'SIGTERM');
             reject(new Error(`Virtual keyboard unavailable: ${trimmed}`));
           }
         }

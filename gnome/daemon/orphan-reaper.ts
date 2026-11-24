@@ -14,7 +14,9 @@
 import fs from 'node:fs';
 
 const REAP_MS = 5000;
-const AUDIO_CHILDREN = new Set(['pw-play', 'pw-record', 'pw-cat']);
+// Include PipeWire CLI helpers (pw-dump/pw-link/wpctl/pactl) so a timed-out AudioHelper
+// cannot leak orphaned clients into PipeWire's 1024-fd limit.
+const AUDIO_CHILDREN = new Set(['pw-play', 'pw-record', 'pw-cat', 'pw-dump', 'pw-link', 'wpctl', 'pactl']);
 
 function ownCgroupProcsPath(): string | null {
   try {

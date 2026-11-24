@@ -19,7 +19,8 @@ const run = (file: string, args: string[], options: { maxBuffer?: number } = {})
 
 export const MIX_SINK_NAME = 'ds5-haptics-mix';
 export const MIX_SINK_DESCRIPTION = 'DS5 Haptics Mix';
-const RECONCILE_MS = 1500;
+const RECONCILE_MS = 3000;
+const MAX_BACKOFF_MS = 30_000;
 
 /** Our own audio plumbing must never feed back into the mix. */
 const IGNORED_BINARIES = new Set(['audiohelper', 'pw-play', 'pw-record', 'pw-cat', 'pw-loopback']);
@@ -57,41 +58,116 @@ function targetChannels(channel: string): string[] {
 }
 
 export class HapticsMix {
+  private enabled = false;
+  private controllerConnected = false;
   private moduleId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private excluded = new Set<string>();
   private reconciling = false;
+  private consecutiveFailures = 0;
+  private nextRetryAt = 0;
   streams: MixStream[] = [];
 
   get running(): boolean {
-    return this.moduleId !== null;
+    return this.enabled;
+  }
+
+  get active(): boolean {
+    return this.enabled && this.controllerConnected;
+  }
+
+  private async ensureSink(existingObjects?: PwObject[]): Promise<boolean> {
+    const objects = existingObjects ?? (await this.dump().catch(() => null));
+    const hasSink = objects?.some(
+      (o) => o.type === 'PipeWire:Interface:Node' && o.info?.props?.['node.name'] === MIX_SINK_NAME
+    );
+    if (hasSink) {
+      return true;
+    }
+    await this.unloadStale();
+    const { stdout } = await run('pactl', [
+      'load-module', 'module-null-sink',
+      `sink_name=${MIX_SINK_NAME}`,
+      'channel_map=front-left,front-right',
+      // Never let the mix drive a graph: it is linked to every app, so as a driver it can end up
+      // clocking someone else's sink (punktfunk's stream sink stalled that way, 2026-11-19).
+      // As a pure follower it rides the clock of whatever real sink each app plays to.
+      `sink_properties='device.description="${MIX_SINK_DESCRIPTION}" node.driver=false priority.driver=0 priority.session=0'`
+    ]);
+    this.moduleId = stdout.trim() || null;
+    return true;
   }
 
   async start(excluded: MixApp[]): Promise<void> {
+    this.enabled = true;
     this.setExcluded(excluded);
-    if (!this.moduleId) {
-      await this.unloadStale();
-      const { stdout } = await run('pactl', [
-        'load-module', 'module-null-sink',
-        `sink_name=${MIX_SINK_NAME}`,
-        'channel_map=front-left,front-right',
-        `sink_properties=device.description="${MIX_SINK_DESCRIPTION}"`
-      ]);
-      this.moduleId = stdout.trim();
+    this.consecutiveFailures = 0;
+    this.nextRetryAt = 0;
+    await this.ensureSink();
+    if (this.controllerConnected) {
+      if (!this.timer) {
+        this.timer = setInterval(() => void this.reconcile(), RECONCILE_MS);
+      }
+      await this.reconcile();
     }
-    if (!this.timer) {
-      this.timer = setInterval(() => void this.reconcile(), RECONCILE_MS);
+  }
+
+  setControllerConnected(connected: boolean): void {
+    if (connected === this.controllerConnected) return;
+    this.controllerConnected = connected;
+    if (!this.enabled) return;
+    if (connected) {
+      this.consecutiveFailures = 0;
+      this.nextRetryAt = 0;
+      if (!this.timer) {
+        this.timer = setInterval(() => void this.reconcile(), RECONCILE_MS);
+      }
+      void this.reconcile();
+    } else {
+      if (this.timer) clearInterval(this.timer);
+      this.timer = null;
+      this.streams = [];
+      void this.unlinkAll();
     }
-    await this.reconcile();
   }
 
   setExcluded(excluded: MixApp[]): void {
     this.excluded = new Set(excluded.map((app) => app.key.toLowerCase()));
   }
 
+  private async unlinkAll(): Promise<void> {
+    const objects = await this.dump().catch(() => null);
+    if (!objects) return;
+    const sink = objects.find(
+      (o) => o.type === 'PipeWire:Interface:Node' && o.info?.props?.['node.name'] === MIX_SINK_NAME
+    );
+    if (!sink) return;
+    const inputIds = new Set<number>();
+    for (const port of objects) {
+      if (port.type !== 'PipeWire:Interface:Port') continue;
+      const p = port.info?.props ?? {};
+      if (p['node.id'] === sink.id && p['port.direction'] === 'in') {
+        inputIds.add(port.id);
+      }
+    }
+    if (!inputIds.size) return;
+    for (const link of objects) {
+      if (link.type !== 'PipeWire:Interface:Link') continue;
+      const out = link.info?.['output-port-id'];
+      const input = link.info?.['input-port-id'];
+      if (out !== undefined && input !== undefined && inputIds.has(input)) {
+        await run('pw-link', ['-d', String(out), String(input)]).catch(() => {});
+      }
+    }
+  }
+
   async stop(): Promise<void> {
+    this.enabled = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.consecutiveFailures = 0;
+    this.nextRetryAt = 0;
+    await this.unlinkAll();
     if (this.moduleId) {
       await run('pactl', ['unload-module', this.moduleId]).catch(() => {});
       this.moduleId = null;
@@ -101,6 +177,7 @@ export class HapticsMix {
 
   /** Synchronous best effort for process exit. */
   stopSync(): void {
+    this.enabled = false;
     if (this.moduleId) {
       try { execFileSync('pactl', ['unload-module', this.moduleId], { timeout: COMMAND_TIMEOUT_MS }); } catch { /* gone already */ }
       this.moduleId = null;
@@ -142,13 +219,19 @@ export class HapticsMix {
   }
 
   private async reconcile(): Promise<void> {
-    if (this.reconciling || !this.moduleId) return;
+    if (this.reconciling || !this.enabled || !this.controllerConnected || Date.now() < this.nextRetryAt) return;
     this.reconciling = true;
     try {
-      const objects = await this.dump();
-      const sink = objects.find((o) => o.type === 'PipeWire:Interface:Node'
+      let objects = await this.dump();
+      let sink = objects.find((o) => o.type === 'PipeWire:Interface:Node'
         && o.info?.props?.['node.name'] === MIX_SINK_NAME);
-      if (!sink) return;
+      if (!sink) {
+        await this.ensureSink(objects);
+        objects = await this.dump();
+        sink = objects.find((o) => o.type === 'PipeWire:Interface:Node'
+          && o.info?.props?.['node.name'] === MIX_SINK_NAME);
+        if (!sink) return;
+      }
       const ports = objects.filter((o) => o.type === 'PipeWire:Interface:Port');
       const sinkInputs = new Map<string, number>();
       for (const port of ports) {
@@ -185,7 +268,7 @@ export class HapticsMix {
       for (const pair of wanted) {
         if (!existing.has(pair)) {
           const [out, input] = pair.split(':');
-          await run('pw-link', [out, input]).catch(() => {});
+          await run('pw-link', ['-P', out, input]).catch(() => {});
         }
       }
       for (const pair of existing) {
@@ -194,8 +277,21 @@ export class HapticsMix {
           await run('pw-link', ['-d', out, input]).catch(() => {});
         }
       }
+      if (this.consecutiveFailures > 0) {
+        console.log('[haptics-mix] PipeWire recovered');
+      }
+      this.consecutiveFailures = 0;
+      this.nextRetryAt = 0;
     } catch (error) {
-      console.warn('[haptics-mix] reconcile failed:', (error as Error).message);
+      this.consecutiveFailures += 1;
+      const backoffMs = Math.min(RECONCILE_MS * 2 ** (this.consecutiveFailures - 1), MAX_BACKOFF_MS);
+      this.nextRetryAt = Date.now() + backoffMs;
+      if (this.consecutiveFailures <= 3 || this.consecutiveFailures % 10 === 0) {
+        console.warn(
+          `[haptics-mix] reconcile failed (${this.consecutiveFailures}x, retry in ${Math.round(backoffMs / 1000)}s):`,
+          (error as Error).message
+        );
+      }
     } finally {
       this.reconciling = false;
     }

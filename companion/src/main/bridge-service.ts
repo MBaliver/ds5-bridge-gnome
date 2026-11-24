@@ -3256,7 +3256,11 @@ export class BridgeService extends EventEmitter {
   private async resolveBridgeMicSourceName(): Promise<string | null> {
     const portTail = this.snapshot.diagnostics.hidPath?.match(/^usb:\d+-(.+)$/)?.[1] ?? null;
     try {
-      const { stdout } = await execFileAsync('pw-dump', [], { maxBuffer: 32 * 1024 * 1024 });
+      const { stdout } = await execFileAsync('pw-dump', [], {
+        maxBuffer: 32 * 1024 * 1024,
+        timeout: 5000,
+        killSignal: 'SIGKILL'
+      });
       const objects = JSON.parse(stdout) as Array<{
         id: number;
         info?: { props?: Record<string, unknown> };
@@ -3311,7 +3315,7 @@ export class BridgeService extends EventEmitter {
         // The description is what Chromium shows as the device label. It must NOT contain
         // the strings Chromium filters (dualsense / wireless controller).
         'source_properties=device.description=DS5BridgeMicPortal'
-      ]);
+      ], { timeout: 5000, killSignal: 'SIGKILL' });
       this.micPortalModuleId = stdout.trim() || null;
       this.appendAudioDebugLines([`[MicPortal] opened over '${master}' module=${this.micPortalModuleId}`]);
       return this.micPortalModuleId ? 'DS5BridgeMicPortal' : null;
@@ -3329,7 +3333,7 @@ export class BridgeService extends EventEmitter {
       return;
     }
     try {
-      await execFileAsync('pactl', ['unload-module', moduleId]);
+      await execFileAsync('pactl', ['unload-module', moduleId], { timeout: 5000, killSignal: 'SIGKILL' });
     } catch {
       // Already gone (device unplug tears the module down with the master source).
     }
@@ -4804,13 +4808,15 @@ export class BridgeService extends EventEmitter {
     // unexpected transport loss knows whether there is a route worth re-claiming. Sampled
     // only while a bridge is connected: with no device the answer is trivially "no" and
     // must not overwrite the last useful sample mid-outage.
-    if (this.device) {
+    if (this.device && this.controllerAudioReady()) {
       try {
         const status = await getDefaultRenderEndpointStatus();
         this.defaultRenderWasBridgeAtLastCheck = status.isBridgeEndpoint;
       } catch {
         // Keep the previous sample; census must stay best-effort.
       }
+    } else if (!this.controllerAudioReady()) {
+      this.defaultRenderWasBridgeAtLastCheck = false;
     }
     try {
       this.bridgeCensus = await listBridges();

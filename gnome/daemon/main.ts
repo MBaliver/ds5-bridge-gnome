@@ -163,7 +163,7 @@ async function applyHapticsMix(enabled: boolean, excluded?: MixApp[]): Promise<u
 
 async function getHapticsMix(): Promise<unknown> {
   hapticsMix.setExcluded(gnomeSettings.hapticsMix.excluded);
-  const streams = hapticsMix.running ? hapticsMix.streams : await hapticsMix.listStreams().catch(() => []);
+  const streams = hapticsMix.active ? hapticsMix.streams : await hapticsMix.listStreams().catch(() => []);
   return { ...gnomeSettings.hapticsMix, running: hapticsMix.running, sinkName: MIX_SINK_NAME, streams };
 }
 
@@ -399,6 +399,7 @@ async function main(): Promise<void> {
 
   let lastSnapshotJson = '';
   service.on('snapshot', (snapshot: BridgeSnapshot) => {
+    hapticsMix.setControllerConnected(Boolean(snapshot.status?.controllerConnected));
     // Another client picked a different source: the mix has nothing to feed any more.
     if (!mixSwitching && gnomeSettings.hapticsMix.enabled && hapticsMix.running && !sourceIsMix(snapshot)) {
       void setHapticsMix(false);
@@ -419,6 +420,7 @@ async function main(): Promise<void> {
 
   service.start();
   startOrphanReaper();
+  hapticsMix.setControllerConnected(Boolean(service.getSnapshot().status?.controllerConnected));
   if (gnomeSettings.hapticsMix.enabled) {
     setHapticsMix(true).catch((error) => console.warn('[haptics-mix] start failed:', (error as Error).message));
   }
